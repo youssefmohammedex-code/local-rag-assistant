@@ -21,7 +21,7 @@ def test_every_word_is_covered():
 
 def test_consecutive_chunks_overlap():
     chunks = split_text(TEXT, chunk_size=300, overlap=80)
-    for a, b in zip(chunks, chunks[1:]):
+    for a, b in zip(chunks, chunks[1:], strict=False):
         assert b.split()[0] in a  # the next chunk starts with text from the previous one
 
 

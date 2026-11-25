@@ -63,7 +63,9 @@ def split_markdown(text: str) -> list[tuple[str, str]]:
     return sections
 
 
-def load_documents(docs_dir: Path) -> list[Page]:
+def load_documents(docs_dir: Path, skipped: list[str] | None = None) -> list[Page]:
+    """Load every supported file. Files that yield no text (empty files, scanned PDFs without a
+    text layer, unreadable PDFs) are appended to `skipped` instead of disappearing silently."""
     docs_dir = Path(docs_dir)
     if not docs_dir.exists():
         raise FileNotFoundError(f"Docs folder not found: {docs_dir}")
@@ -74,12 +76,16 @@ def load_documents(docs_dir: Path) -> list[Page]:
         if not path.is_file() or suffix not in SUPPORTED_SUFFIXES:
             continue
         source = path.relative_to(docs_dir).as_posix()
+        before = len(pages)
         if suffix == ".pdf":
-            reader = PdfReader(path)
-            for number, pdf_page in enumerate(reader.pages, start=1):
-                text = pdf_page.extract_text() or ""
-                if text.strip():
-                    pages.append(Page(source, number, text))
+            try:
+                reader = PdfReader(path)
+                for number, pdf_page in enumerate(reader.pages, start=1):
+                    text = pdf_page.extract_text() or ""
+                    if text.strip():
+                        pages.append(Page(source, number, text))
+            except Exception:  # corrupt or encrypted PDF: skip it, report it
+                pass
         elif suffix == ".md":
             text = path.read_text(encoding="utf-8", errors="ignore")
             for part, (section, body) in enumerate(split_markdown(text), start=1):
@@ -88,4 +94,6 @@ def load_documents(docs_dir: Path) -> list[Page]:
             text = path.read_text(encoding="utf-8", errors="ignore")
             if text.strip():
                 pages.append(Page(source, 1, text))
+        if len(pages) == before and skipped is not None:
+            skipped.append(source)
     return pages

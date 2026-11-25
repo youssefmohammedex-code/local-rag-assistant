@@ -71,7 +71,7 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
                     judge_model: str | None = None, mode: str = "concise") -> dict:
     pipeline = RAGPipeline(settings)
     if reingest or pipeline.store.count() == 0:
-        n_chunks = pipeline.ingest(reset=True)
+        n_chunks = pipeline.ingest(reset=True).chunks
     else:
         n_chunks = pipeline.store.count()
 

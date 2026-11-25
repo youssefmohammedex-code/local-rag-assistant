@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import ollama
 
 from rag.chunking import chunk_pages
 from rag.config import Settings
+from rag.errors import NoDocumentsError
 from rag.loaders import load_documents, pretty_source
 from rag.store import Hit, VectorStore
 
@@ -62,6 +63,13 @@ class Answer:
 
 
 @dataclass
+class IngestReport:
+    chunks: int
+    files: int
+    skipped: list[str]  # files that produced no text (e.g. scanned PDFs without a text layer)
+
+
+@dataclass
 class GenerationStats:
     tokens: int = 0
     seconds: float = 0.0
@@ -80,14 +88,26 @@ class RAGPipeline:
         self._llm = ollama.Client(host=self.settings.ollama_host)
         self.last_stats = GenerationStats()
 
-    def ingest(self, reset: bool = True) -> int:
-        """Load, chunk and embed every document. Returns the number of chunks stored."""
-        pages = load_documents(self.settings.docs_dir)
+    def ingest(self, reset: bool = True) -> IngestReport:
+        """Load, chunk and embed every document, then replace the index.
+
+        Safe on failure: all embeddings are computed *before* the old index is touched, so if
+        Ollama is down (or anything else fails while embedding) the existing index is kept.
+        An empty or misconfigured docs folder raises NoDocumentsError instead of wiping the index.
+        """
+        skipped: list[str] = []
+        pages = load_documents(self.settings.docs_dir, skipped=skipped)
         chunks = chunk_pages(pages, self.settings.chunk_size, self.settings.chunk_overlap)
+        if not chunks:
+            raise NoDocumentsError(
+                f"No readable documents found in {self.settings.docs_dir} (supported: .pdf, .md, .txt). "
+                "The existing index was left unchanged."
+            )
+        embeddings = self.store.embed_chunks(chunks)
         if reset:
             self.store.reset()
-        self.store.add(chunks)
-        return len(chunks)
+        self.store.add(chunks, embeddings)
+        return IngestReport(chunks=len(chunks), files=len({c.source for c in chunks}), skipped=skipped)
 
     def default_k(self, mode: str | None = None) -> int:
         return self.settings.top_k or MODES[mode or self.settings.answer_mode].k
