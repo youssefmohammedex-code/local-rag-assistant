@@ -32,6 +32,7 @@ python eval/generalization/audit_files.py ../edge
 | `q_ood.jsonl` | 3 questions the docs cannot answer (the model should refuse) |
 | `make_pdfs.py` | realistic test PDFs (heading fonts, running header/footer) + one plain single-font PDF |
 | `q_pdf_precise.jsonl`, `q_pdf_lists.jsonl` | 17 precise + 2 list questions about those PDFs, written before any search |
+| `q_pdf_lists_heldout.jsonl` | 1 more PDF list question, written before trying any fix for PDF lists |
 | `write_*.py` | how the question files were generated (expected items come from the real heading structure) |
 
 Package versions differ between machines, so exact numbers may vary slightly. The questions only

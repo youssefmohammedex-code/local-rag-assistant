@@ -144,6 +144,7 @@ Questions like *"describe every module"* or *"list all the decisions"* need **ev
 2. Retrieve 20 candidates. Each one's own section, every ancestor heading, and the file's top level (for documents without a title) count as a possible "list".
 3. Summarize each possible list as its **full heading path plus its sub-headings** (*"orjson > Types: dataclass; datetime; enum; …"*). The summary most similar to the question, using the same embedding model as search, is the list. There are no hand-tuned weights.
 4. **Additive by design:** keep exactly the normal top-k passages, then add the first passage of every sub-section in document order, trimmed to fit a ~20k-character total budget.
+5. **Expand the two best-matching sections, not one** (added later; see "Choosing how many lists to expand" below).
 
 **Coverage** is the share of required items that appear anywhere in the retrieved text (k=10), measured on 26 list questions across 3 document sets:
 
@@ -226,14 +227,33 @@ Questions like *"describe every module"* or *"list all the decisions"* need **ev
 | PDF MRR | 0.73 | **0.83** |
 | Third-party Markdown hit@4 | 87% | **90%** |
 | Your-docs held-out hit@1 | 90% | 85% (one question dropped one rank) |
-| PDF list coverage | **76%** | 59% |
+| PDF list coverage | 76% | 59% at first, then **87%** after expanding the two best lists (see below) |
 
 **End-to-end with qwen2.5:7b** on the PDF questions that failed before:
 - *"Which Python version does httpcore require?"* went from "I don't know" to **"HTTP Core requires Python 3.8+"**.
 - *"What does pandas aim to become?"* went from "I don't know" to the correct answer, cited as *"What is it?, p.1"*.
 - *"What changed in httpcore 1.0.5?"* is now correct, cited as *"1.0.5 (March 27th, 2024), p.3"*.
 
-**Honest trade-off:** PDF list questions got worse (76% → 59%). A whole PDF page happened to pack in many changelog entries; per-section passages depend on list expansion choosing the right section. For *"every httpcore release"*, it picked one release's "Added / Fixed" sub-list over the whole changelog by 0.793 to 0.791 cosine similarity. I chose not to add another hand-tuned tie-break rule, since that's what overfit before.
+**The trade-off this introduced, and its fix:** structured PDFs first made PDF list questions *worse* (76% → 59%). A whole PDF page happened to pack in many changelog entries, while per-section passages depend on list expansion choosing the right section. For *"every httpcore release"*, it picked one release's "Added / Fixed" sub-list over the whole changelog, by 0.793 to 0.791 cosine similarity.
+
+### Choosing how many lists to expand
+
+**The near-tie above showed that the section selector is often unsure.** Rather than add a tuned tie-break rule (that's what overfit before), I compared four strategies with no tuned constants, on **29 list questions over 4 document sets** (private, sample, third-party Markdown/TXT and PDFs):
+
+| Strategy | Coverage | Questions worse than top1 | Avg. characters sent |
+|---|---|---|---|
+| No expansion | 68% | 10 | 7.5k |
+| top1: expand the best-matching section (previous default) | 86% | – | 12.2k |
+| ancestor: prefer a parent section among the top 3 | 84% | 3 | 12.5k |
+| nested-both: expand the best two only if one contains the other | 94% | 0 | 13.5k |
+| **top2: expand the two best-matching sections** | **97%** | **0** | 15.5k |
+
+- **PDF list questions:** 58% → **87%**, now *above* the old page-based 76%.
+- **Every other list set** also improved: private 87% → 100%, third-party 77% → 100%.
+- **Precise questions are unchanged,** because only list questions are routed through expansion.
+- **Cost:** about 27% more text sent for list questions, still within the 20k-character budget.
+- **End-to-end** (qwen2.5:7b, Detailed mode, hand-graded): for *"Summarize each section of the Rich README"* (a PDF), retrieval delivered all 10 sections. The answer covered 9 of them, each with a citation and page; it skipped "Toad" even though that passage was retrieved. It also attached the wrong code example to 2 sections and listed some sub-features as if they were sections. Retrieval is no longer the bottleneck for this question; the 7B model is.
+- **Caveat:** the PDF list evidence is only 3 questions. One more held-out question was planned, but two of the three generated candidates had to be dropped (an empty list, and items that were common words).
 - **Questions that don't name their subject are ambiguous:** in "Which command prints the variables in JSON format?", orjson is *about* JSON.
 
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
@@ -302,7 +322,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 100 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 102 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
