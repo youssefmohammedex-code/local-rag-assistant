@@ -29,7 +29,12 @@ The project also includes an **evaluation harness** that measures how chunking c
 | Vector store | Chroma (persistent, cosine) | Zero setup, stores metadata for citations |
 | LLM | `llama3.2:3b` (swappable) | Runs comfortably in 16 GB RAM without a GPU |
 | Chunking | Custom boundary-aware sliding window | Cuts at paragraph, sentence or word boundaries, with overlap |
-| UI | Streamlit chat with streaming and a source viewer | |
+| Markdown structure | Heading-aware sections + contextual headers | Each chunk is prefixed with its heading path (e.g. `Guide > 7. Modules > Module C`), so a passage keeps its meaning after it is cut out |
+| Answer modes | **Detailed** (k=10, structured Markdown) / **Concise** (k=4, 1–3 sentences) | Broad questions ("describe every module…") need more context and room to answer |
+| Context window | `num_ctx=8192` | Ollama's default is too small for 10 passages plus a long answer |
+| UI | Streamlit "DocChat": streaming answers, citation badges, source cards with match scores, document upload, model picker | |
+
+**Example of the impact:** for *"Describe every module, who owns it, and what it is responsible for"* over a 110 KB set of architecture docs, the first version gave a 79-word answer covering 3 of 9 modules. With heading-aware chunks, Detailed mode and the larger context window, it gave 559 words covering all 9 modules and their owners.
 
 ## Quickstart
 
@@ -57,8 +62,9 @@ python -m rag ingest
 **4. Ask questions:**
 
 ```bash
-python -m rag ask "What GPA do I need for the Dean's Honor List?"
-streamlit run app.py          # or use the chat UI
+python -m rag ask "What GPA do I need for the Dean's Honor List?"            # detailed answer
+python -m rag ask --mode concise "How much does late registration cost?"
+streamlit run app.py          # or use the DocChat UI (upload files, pick model and answer length)
 ```
 
 ## Evaluation
@@ -104,7 +110,9 @@ Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chu
 | `RAG_LLM_MODEL` | `llama3.2:3b` |
 | `RAG_EMBED_MODEL` | `nomic-embed-text` |
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `1000` / `150` (best config in the eval) |
-| `RAG_TOP_K` | `4` |
+| `RAG_ANSWER_MODE` | `detailed` (or `concise`) |
+| `RAG_TOP_K` | per mode: `10` detailed, `4` concise |
+| `RAG_NUM_CTX` | `8192` |
 | `RAG_DOCS_DIR` | `data/docs` |
 
 ## Project structure
