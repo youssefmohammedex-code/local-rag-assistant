@@ -293,7 +293,24 @@ Coverage is the share of expected items found in the answer. **Every answer was 
   - A strict "exactly these headings" outline: it forced unrelated sections into the answer.
   - Outlining only the best-matching list: it would break annotated-types, whose constraints are in the second-ranked list.
   - Listing each section's passage ids in the outline: it lowered coverage on 3 of 13 questions and did not stop the httpcore invention.
-- **Not counted as a model failure:** "List every 2.14 release of pydantic" scores 0% with both strategies, because only 38% of the releases are retrieved. That's a retrieval gap.
+- **Not counted as a model failure:** "List every 2.14 release of pydantic" scored 0% with both strategies, because only 38% of the releases were retrieved. That was a retrieval gap, fixed below.
+
+### List questions that name a code ("every 2.14 release")
+
+**Why it failed:** the right list was the changelog itself, but its summary was a wall of 100+ version numbers that didn't resemble the question, so three individual 2.14 releases' sub-lists ranked higher. Even when a whole changelog is picked, expansion fills the budget in document order and can run out before older releases.
+
+**The fix reuses the exact-code detection from keyword search:**
+- **Filtering:** when a list question contains a code (`2.14`, `v3`, `0.10.0`) and 2+ sub-sections of a section are named by it, that section's candidate list becomes just those sub-sections.
+- **Matching at boundaries:** `2.14` matches `v2.14.4` and `v2.14.0b1` but not `v12.14` or `2.140`, and `v2.14.0` doesn't match `v2.14.0b1`.
+- **Everything else is unchanged:** questions without a code, and codes that name only one sub-section ("the v2.14.0 release notes"), behave as before.
+
+| Check | Before | After |
+|---|---|---|
+| The pydantic question | 38% | **100%** |
+| The 29 existing list questions | 96.9% | 99.1% (only the pydantic question changed) |
+| **20 generated questions** (every major.minor group of 2+ releases in every changelog in the test corpora, Markdown and PDF, not hand-picked) | 86.4% | **100%**, none worse |
+
+End to end, qwen2.5:7b now lists all 8 releases in order, each with its own changes; spot-checked facts match the source.
 
 Choose the strategy with `RAG_LIST_ANSWERS` or `python -m rag ask --list-answers single|checklist|per-item`. Concise mode and non-list questions always use one plain call.
 
@@ -364,7 +381,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 109 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 121 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
