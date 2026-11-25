@@ -1,0 +1,12 @@
+{"question": "What is the maximum number of credit hours a student on academic probation can take?", "expected_source": "student-handbook.md", "reference_answer": "12 credit hours."}
+{"question": "Until which week can a student withdraw from a course and get a W?", "expected_source": "student-handbook.md", "reference_answer": "Until the end of the tenth week."}
+{"question": "What GPA do I need to qualify for the Dean's Honor List?", "expected_source": "student-handbook.md", "reference_answer": "A semester GPA of 3.7 or higher, with at least 15 credit hours and no grade below B."}
+{"question": "What happens if I miss more than a quarter of the lectures in a course?", "expected_source": "student-handbook.md", "reference_answer": "You are barred from the final exam and receive an F."}
+{"question": "How many credit hours are required to graduate in Computer Engineering?", "expected_source": "student-handbook.md", "reference_answer": "160 credit hours."}
+{"question": "If I repeat a course, which grade counts in my GPA?", "expected_source": "student-handbook.md", "reference_answer": "Only the higher of the two grades."}
+{"question": "How much does late registration cost?", "expected_source": "student-handbook.md", "reference_answer": "500 EGP."}
+{"question": "What score do I need on the safety quiz before using the lab?", "expected_source": "lab-safety-rules.md", "reference_answer": "At least 80%."}
+{"question": "Where is the emergency power cut-off switch on the electronics workbench?", "expected_source": "lab-safety-rules.md", "reference_answer": "On the right side of the bench, marked with a red label."}
+{"question": "How long can I borrow an oscilloscope and what is the late fee?", "expected_source": "lab-safety-rules.md", "reference_answer": "Up to 7 days; 50 EGP per day late."}
+{"question": "Where should we gather during a fire evacuation?", "expected_source": "lab-safety-rules.md", "reference_answer": "At the assembly point in the main parking lot."}
+{"question": "What is the phone extension of the campus clinic?", "expected_source": "lab-safety-rules.md", "reference_answer": "Extension 2222."}
