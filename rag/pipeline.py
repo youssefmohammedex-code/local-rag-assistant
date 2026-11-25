@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import ollama
 
+from rag.bm25 import tokenize
 from rag.chunking import chunk_pages
 from rag.config import Settings
 from rag.errors import NoDocumentsError
@@ -42,7 +44,55 @@ MODES: dict[str, Mode] = {
     "concise": Mode(k=4, instructions="Answer in 1-3 sentences."),
 }
 
-CITATION_RULE = 'After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
+_LIST_QUESTION = re.compile(r"\b(all|every|each|list|enumerate)\b", re.IGNORECASE)
+LIST_CANDIDATES = 20  # candidates inspected to find the section a list question is about
+LIST_TOP_HITS = 3  # best direct hits kept in front of the expanded list
+MIN_ITEM_CHARS = 350  # never trim a list item below this (heading + first lines)
+CHILD_MATCH_WEIGHT = 4.0
+HEADING_MATCH_WEIGHT = 2.0  # per question word found in the parent's own heading
+
+
+def is_list_question(question: str) -> bool:
+    return bool(_LIST_QUESTION.search(question))
+
+
+_LIST_WORDS = {"all", "every", "each", "list", "enumerate", "describe", "summarize", "summarise", "section"}
+
+
+def _terms(text: str) -> set[str]:
+    """Content words with a crude plural strip, so "modules" matches "Module"."""
+    return {t[:-1] if len(t) > 3 and t.endswith("s") else t for t in tokenize(text)} - _LIST_WORDS
+
+
+def pick_list_parent(question: str, hits: list[Hit]) -> tuple[str, str] | None:
+    """Choose the (source, section) a list question is about.
+
+    Every heading level of every candidate is a possible parent; its distinct sub-sections among
+    the candidates are counted, weighted by rank (coverage). That alone favours whichever section
+    simply has the most children, so it is multiplied by how well the question matches the
+    parent's own heading and its sub-section headings (relevance): "all the end-to-end flows"
+    should pick the section titled "End-to-end flows", not the one with 26 decisions in it."""
+    children: dict[tuple[str, str], dict[str, int]] = {}
+    for rank, hit in enumerate(hits):
+        parts = hit.section.split(" > ") if hit.section else []
+        for depth in range(1, len(parts)):
+            key = (hit.source, " > ".join(parts[:depth]))
+            children.setdefault(key, {}).setdefault(parts[depth], rank)
+    query = _terms(question)
+    scored = {}
+    for key, kids in children.items():
+        if len(kids) < 2:
+            continue
+        coverage = sum(1 / (5 + r) for r in kids.values())
+        heading_match = len(query & _terms(key[1].split(" > ")[-1]))
+        children_match = sum(bool(query & _terms(k)) for k in kids) / len(kids)
+        # Sub-headings that echo the question ("every module" -> "Module A", "Module B") are the
+        # strongest sign that these sub-sections *are* the list, so they weigh most.
+        scored[key] = coverage * (1 + HEADING_MATCH_WEIGHT * heading_match + CHILD_MATCH_WEIGHT * children_match)
+    return max(scored, key=scored.get) if scored else None
+
+
+CITATION_RULE ='After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
 
 
 def build_prompt(question: str, hits: list[Hit], mode: str = "detailed") -> str:
@@ -113,7 +163,34 @@ class RAGPipeline:
         return self.settings.top_k or MODES[mode or self.settings.answer_mode].k
 
     def retrieve(self, question: str, k: int | None = None, mode: str | None = None) -> list[Hit]:
-        return self.store.search(question, k or self.default_k(), mode or self.settings.retrieval)
+        k, mode = k or self.default_k(), mode or self.settings.retrieval
+        if not (self.settings.expand_lists and is_list_question(question)):
+            return self.store.search(question, k, mode)
+        return self._retrieve_list(question, k, mode)
+
+    def _retrieve_list(self, question: str, k: int, mode: str) -> list[Hit]:
+        """List questions ("describe every module") need one passage per item, not the k most
+        similar passages (which cluster on a few items). Find the section whose sub-sections
+        dominate the candidates, then add the first passage of *every* sub-section, trimming
+        each one so the whole list fits the context budget."""
+        candidates = self.store.search(question, max(k, LIST_CANDIDATES), mode)
+        parent = pick_list_parent(question, candidates)
+        if parent is None:
+            return candidates[:k]
+        source, parent_section = parent
+        top = candidates[:LIST_TOP_HITS]
+        items = [h for h in self.store.first_chunks_under(source, parent_section, question)
+                 if h.id not in {t.id for t in top}]
+        budget = self.settings.list_char_budget - sum(len(h.text) for h in top)
+        per_item = max(MIN_ITEM_CHARS, budget // max(len(items), 1))
+        expanded, used = [], 0
+        for item in items:
+            item = item.truncated(per_item)
+            if used + len(item.text) > budget:
+                break  # still too many items: keep the first ones in document order
+            expanded.append(item)
+            used += len(item.text)
+        return top + expanded
 
     def _request(self, question: str, hits: list[Hit], mode: str | None) -> dict:
         return {

@@ -64,7 +64,8 @@ section[data-testid="stSidebar"] .doc {font-size: .84rem; padding: .3rem .1rem;
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
-VIA_LABEL = {"keyword": "keyword match · ", "both": "keyword + meaning · ", "meaning": ""}
+VIA_LABEL = {"keyword": "keyword match · ", "both": "keyword + meaning · ", "meaning": "",
+             "section": "list item · "}
 
 EXAMPLES = [
     "Give me an overview of what these documents cover.",
@@ -120,7 +121,9 @@ def render_assistant(message: dict) -> None:
         st.markdown(f'<div class="meta">{message["meta"]}</div>', unsafe_allow_html=True)
     if message.get("hits"):
         n_cited = len(cited_ids(message["content"]) & set(range(1, len(message["hits"]) + 1)))
-        with st.expander(f"Sources · {n_cited} cited of {len(message['hits'])} retrieved"):
+        n_list = sum(h.via == "section" for h in message["hits"])
+        list_note = f" · {n_list} added as list items" if n_list else ""
+        with st.expander(f"Sources · {n_cited} cited of {len(message['hits'])} retrieved{list_note}"):
             st.markdown(source_cards(message["hits"], message["content"]), unsafe_allow_html=True)
 
 

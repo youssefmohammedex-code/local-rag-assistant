@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 
 import chromadb
 import numpy as np
@@ -15,6 +16,7 @@ from rag.config import Settings
 
 SEARCH_MODES = ("hybrid", "vector")
 CANDIDATE_POOL = 50  # candidates taken from each ranking before fusion
+_ORDER = re.compile(r"::s(\d+)::c(\d+)$")  # section index and chunk index inside a chunk id
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,13 @@ class Hit:
     page: int
     score: float  # cosine similarity, higher is better
     section: str = ""
-    via: str = "meaning"  # which search found it: "meaning" (vector), "keyword" (BM25) or "both"
+    via: str = "meaning"  # "meaning" (vector), "keyword" (BM25), "both", or "section" (list expansion)
+    id: str = ""
+
+    def truncated(self, max_chars: int) -> Hit:
+        if len(self.text) <= max_chars:
+            return self
+        return replace(self, text=self.text[:max_chars].rsplit(" ", 1)[0] + " …")
 
 
 class VectorStore:
@@ -130,6 +138,12 @@ class VectorStore:
             keyword_weight = 2.0 if any(is_identifier(t) for t in tokenize(query)) else 1.0
             ids = reciprocal_rank_fusion([vector_ids, keyword_ids], weights=[1.0, keyword_weight])[:k]
 
+        via = {i: "both" if i in vector_ids and i in keyword_ids else ("keyword" if i in keyword_ids else "meaning")
+               for i in ids}
+        return self._hits(ids, query_vector, via)
+
+    def _hits(self, ids: list[str], query_vector: list[float], via: dict[str, str]) -> list[Hit]:
+        """Build Hits in the given order, scoring each by cosine similarity to the query."""
         got = self._collection.get(ids=ids, include=["documents", "metadatas", "embeddings"])
         by_id = dict(zip(got["ids"], zip(got["documents"], got["metadatas"], got["embeddings"], strict=True),
                          strict=True))
@@ -139,8 +153,26 @@ class VectorStore:
             doc, meta, emb = by_id[chunk_id]
             e = np.asarray(emb, dtype=float)
             cosine = float(e @ q / ((np.linalg.norm(e) * np.linalg.norm(q)) or 1.0))
-            in_vec, in_kw = chunk_id in vector_ids, chunk_id in keyword_ids
-            via = "both" if in_vec and in_kw else ("keyword" if in_kw else "meaning")
             hits.append(Hit(text=doc, source=meta["source"], page=int(meta["page"]), score=cosine,
-                            section=meta.get("section", ""), via=via))
+                            section=meta.get("section", ""), via=via[chunk_id], id=chunk_id))
         return hits
+
+    def first_chunks_under(self, source: str, parent: str, query: str) -> list[Hit]:
+        """The first chunk of every direct child section of `parent` in `source`, in document order.
+        Used to give list questions ("every module") one passage per item instead of the top-k."""
+        data = self._collection.get(where={"source": source}, include=["metadatas"])
+        prefix = parent + " > "
+        first: dict[str, tuple[tuple[int, int], str]] = {}
+        for chunk_id, meta in zip(data["ids"], data["metadatas"], strict=True):
+            section = meta.get("section", "")
+            if not section.startswith(prefix):
+                continue
+            child = section[len(prefix):].split(" > ")[0]
+            match = _ORDER.search(chunk_id)
+            order = (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+            if child not in first or order < first[child][0]:
+                first[child] = (order, chunk_id)
+        ids = [chunk_id for _, chunk_id in sorted(first.values())]
+        if not ids:
+            return []
+        return self._hits(ids, self.embed([query], kind="query")[0], dict.fromkeys(ids, "section"))
