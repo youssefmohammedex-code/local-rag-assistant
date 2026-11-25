@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import ollama
 
+from rag.bm25 import identifiers
 from rag.chunking import chunk_pages
 from rag.config import Settings
 from rag.errors import NoDocumentsError
@@ -54,9 +55,25 @@ def is_list_question(question: str) -> bool:
     return bool(_LIST_QUESTION.search(question))
 
 
-def candidate_lists(hits: list[Hit], outlines: dict[str, list[tuple[str, str]]]) -> dict[tuple[str, str], list]:
+def names_code(name: str, code: str) -> bool:
+    """True if a heading contains an exact code from the question as a whole code or a prefix of one:
+    "2.14" matches "v2.14.4 (2026-10-08)" but not "v12.14" or "2.140"; "v2.14.0" does not match "v2.14.0b1"."""
+    return re.search(rf"(?<![0-9.]){re.escape(code)}(?![0-9a-z])", name.lower()) is not None
+
+
+def filter_by_codes(kids: list, codes: set[str]) -> list:
+    """Sub-sections named by a code in the question ("every 2.14 release" -> v2.14.0, v2.14.1, ...).
+    Unchanged unless at least 2 match: the question then asks for that subset, not the whole list
+    (a changelog with 100+ releases summarizes as a wall of version numbers and never ranks first)."""
+    matching = [kid for kid in kids if any(names_code(kid[0], code) for code in codes)]
+    return matching if len(matching) >= 2 else kids
+
+
+def candidate_lists(hits: list[Hit], outlines: dict[str, list[tuple[str, str]]],
+                    codes: set[str] | None = None) -> dict[tuple[str, str], list]:
     """Every section that could be "the list": each candidate's own section, all its ancestors, and
-    the file's top level (for documents without a title heading). Only sections with 2+ sub-sections."""
+    the file's top level (for documents without a title heading). Only sections with 2+ sub-sections.
+    With codes from the question, a section's sub-sections are narrowed to those the codes name."""
     nodes: dict[tuple[str, str], list] = {}
     for hit in hits:
         parts = hit.section.split(" > ") if hit.section else []
@@ -64,6 +81,8 @@ def candidate_lists(hits: list[Hit], outlines: dict[str, list[tuple[str, str]]])
             key = (hit.source, " > ".join(parts[:depth]))
             if key not in nodes:
                 kids = children_in_outline(outlines[hit.source], key[1])
+                if codes:
+                    kids = filter_by_codes(kids, codes)
                 nodes[key] = kids if len(kids) >= 2 else []
     return {key: kids for key, kids in nodes.items() if kids}
 
@@ -222,7 +241,7 @@ class RAGPipeline:
         model as search). No hand-tuned weights: an earlier weighted-heuristic version overfit one
         document set and failed on new documents."""
         outlines = {source: self.store.outline(source) for source in {h.source for h in candidates}}
-        nodes = candidate_lists(candidates, outlines)
+        nodes = candidate_lists(candidates, outlines, identifiers(question))
         if not nodes:
             return []
         keys = list(nodes)
