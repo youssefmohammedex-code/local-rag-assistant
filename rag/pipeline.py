@@ -9,12 +9,11 @@ from dataclasses import dataclass
 
 import ollama
 
-from rag.bm25 import tokenize
 from rag.chunking import chunk_pages
 from rag.config import Settings
 from rag.errors import NoDocumentsError
 from rag.loaders import load_documents, pretty_source
-from rag.store import Hit, VectorStore
+from rag.store import Hit, VectorStore, children_in_outline
 
 SYSTEM_PROMPT = (
     "You are a precise assistant that answers questions about the user's documents. "
@@ -46,51 +45,36 @@ MODES: dict[str, Mode] = {
 }
 
 _LIST_QUESTION = re.compile(r"\b(all|every|each|list|enumerate)\b", re.IGNORECASE)
-LIST_CANDIDATES = 20  # candidates inspected to find the section a list question is about
-LIST_TOP_HITS = 3  # best direct hits kept in front of the expanded list
+LIST_CANDIDATES = 20  # candidates whose sections (and their ancestors) are considered as "the list"
 MIN_ITEM_CHARS = 350  # never trim a list item below this (heading + first lines)
-CHILD_MATCH_WEIGHT = 4.0
-HEADING_MATCH_WEIGHT = 2.0  # per question word found in the parent's own heading
+MAX_NODE_CHILDREN = 60  # sub-headings included when describing a section for selection
 
 
 def is_list_question(question: str) -> bool:
     return bool(_LIST_QUESTION.search(question))
 
 
-_LIST_WORDS = {"all", "every", "each", "list", "enumerate", "describe", "summarize", "summarise", "section"}
-
-
-def _terms(text: str) -> set[str]:
-    """Content words with a crude plural strip, so "modules" matches "Module"."""
-    return {t[:-1] if len(t) > 3 and t.endswith("s") else t for t in tokenize(text)} - _LIST_WORDS
-
-
-def pick_list_parent(question: str, hits: list[Hit]) -> tuple[str, str] | None:
-    """Choose the (source, section) a list question is about.
-
-    Every heading level of every candidate is a possible parent; its distinct sub-sections among
-    the candidates are counted, weighted by rank (coverage). That alone favours whichever section
-    simply has the most children, so it is multiplied by how well the question matches the
-    parent's own heading and its sub-section headings (relevance): "all the end-to-end flows"
-    should pick the section titled "End-to-end flows", not the one with 26 decisions in it."""
-    children: dict[tuple[str, str], dict[str, int]] = {}
-    for rank, hit in enumerate(hits):
+def candidate_lists(hits: list[Hit], outlines: dict[str, list[tuple[str, str]]]) -> dict[tuple[str, str], list]:
+    """Every section that could be "the list": each candidate's own section, all its ancestors, and
+    the file's top level (for documents without a title heading). Only sections with 2+ sub-sections."""
+    nodes: dict[tuple[str, str], list] = {}
+    for hit in hits:
         parts = hit.section.split(" > ") if hit.section else []
-        for depth in range(1, len(parts)):
+        for depth in range(len(parts) + 1):
             key = (hit.source, " > ".join(parts[:depth]))
-            children.setdefault(key, {}).setdefault(parts[depth], rank)
-    query = _terms(question)
-    scored = {}
-    for key, kids in children.items():
-        if len(kids) < 2:
-            continue
-        coverage = sum(1 / (5 + r) for r in kids.values())
-        heading_match = len(query & _terms(key[1].split(" > ")[-1]))
-        children_match = sum(bool(query & _terms(k)) for k in kids) / len(kids)
-        # Sub-headings that echo the question ("every module" -> "Module A", "Module B") are the
-        # strongest sign that these sub-sections *are* the list, so they weigh most.
-        scored[key] = coverage * (1 + HEADING_MATCH_WEIGHT * heading_match + CHILD_MATCH_WEIGHT * children_match)
-    return max(scored, key=scored.get) if scored else None
+            if key not in nodes:
+                kids = children_in_outline(outlines[hit.source], key[1])
+                nodes[key] = kids if len(kids) >= 2 else []
+    return {key: kids for key, kids in nodes.items() if kids}
+
+
+def describe_list(source: str, parent: str, kids: list) -> str:
+    """A section summarized as its full heading path plus its sub-headings, e.g.
+    "orjson > Types: dataclass; datetime; enum; ...". The full path matters: with only the last
+    heading, the whole-document summary was the only one containing the product name, so any
+    question naming the product ("all the types orjson can serialize") picked the whole document."""
+    path = parent or pretty_source(source)
+    return f"{path}: " + "; ".join(name for name, _ in kids[:MAX_NODE_CHILDREN])
 
 
 CITATION_RULE ='After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
@@ -139,6 +123,7 @@ class RAGPipeline:
         self.store = VectorStore(self.settings)
         self._llm = ollama.Client(host=self.settings.ollama_host)
         self.last_stats = GenerationStats()
+        self.list_scorer = self.store.similarities  # (question, texts) -> scores; replaceable in tests
 
     def ingest(self, reset: bool = True) -> IngestReport:
         """Load, chunk and embed every document, then replace the index.
@@ -172,19 +157,36 @@ class RAGPipeline:
             return self.store.search(question, k, mode)
         return self._retrieve_list(question, k, mode)
 
+    def pick_list(self, question: str, candidates: list[Hit]) -> tuple[str, str, list] | None:
+        """Which section is the question asking to enumerate? Each possible section is summarized as
+        "heading: sub-heading; sub-heading; ..." and the one whose summary is most similar to the
+        question (same embedding model as search) wins. No hand-tuned weights: an earlier
+        weighted-heuristic version overfit one document set and failed on new documents."""
+        outlines = {source: self.store.outline(source) for source in {h.source for h in candidates}}
+        nodes = candidate_lists(candidates, outlines)
+        if not nodes:
+            return None
+        keys = list(nodes)
+        scores = self.list_scorer(question, [describe_list(s, p, nodes[(s, p)]) for s, p in keys])
+        source, parent = keys[max(range(len(keys)), key=scores.__getitem__)]
+        return source, parent, nodes[(source, parent)]
+
     def _retrieve_list(self, question: str, k: int, mode: str) -> list[Hit]:
         """List questions ("describe every module") need one passage per item, not the k most
-        similar passages (which cluster on a few items). Find the section whose sub-sections
-        dominate the candidates, then add the first passage of *every* sub-section, trimming
+        similar passages (which cluster on a few items). Pick the section being enumerated, keep
+        the best few normal hits, then add the first passage of *every* sub-section, trimming
         each one so the whole list fits the context budget."""
         candidates = self.store.search(question, max(k, LIST_CANDIDATES), mode)
-        parent = pick_list_parent(question, candidates)
-        if parent is None:
+        picked = self.pick_list(question, candidates)
+        if picked is None:
             return candidates[:k]
-        source, parent_section = parent
-        top = candidates[:LIST_TOP_HITS]
-        items = [h for h in self.store.first_chunks_under(source, parent_section, question)
-                 if h.id not in {t.id for t in top}]
+        _, _, kids = picked
+        # Additive by design: keep exactly the normal top-k and only add list items in the space
+        # left. Picking the right section is ambiguous and every selection rule tried failed on
+        # some documents; this way a wrong pick costs context space, never the normal results.
+        top = candidates[:k]
+        top_ids = {t.id for t in top}
+        items = self.store.hits_for([cid for _, cid in kids if cid not in top_ids], question, via="section")
         budget = self.settings.list_char_budget - sum(len(h.text) for h in top)
         per_item = max(MIN_ITEM_CHARS, budget // max(len(items), 1))
         expanded, used = [], 0

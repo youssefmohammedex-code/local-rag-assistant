@@ -31,10 +31,11 @@ class Settings:
     top_k: int | None = field(default_factory=lambda: _env_int("RAG_TOP_K", None))
     # "hybrid" (embeddings + BM25 keyword search) or "vector" (embeddings only).
     retrieval: str = field(default_factory=lambda: os.getenv("RAG_RETRIEVAL", "hybrid"))
-    # List questions ("describe every module") get one passage per sub-section, within a budget
-    # (~16k characters, about 4k tokens) that leaves room in num_ctx for a long answer.
+    # List questions ("describe every module") get one extra passage per sub-section on top of the
+    # normal top-k, within a total budget (~20k characters, about 5k tokens) that leaves room in
+    # num_ctx for a long answer.
     expand_lists: bool = field(default_factory=lambda: os.getenv("RAG_EXPAND_LISTS", "1") != "0")
-    list_char_budget: int = field(default_factory=lambda: _env_int("RAG_LIST_CHAR_BUDGET", 16000))
+    list_char_budget: int = field(default_factory=lambda: _env_int("RAG_LIST_CHAR_BUDGET", 20000))
     # Ollama's default context window is small; 10 passages + a long answer needs more room.
     num_ctx: int = field(default_factory=lambda: _env_int("RAG_NUM_CTX", 8192))
     temperature: float = 0.1

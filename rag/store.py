@@ -10,7 +10,7 @@ import chromadb
 import numpy as np
 import ollama
 
-from rag.bm25 import BM25, is_identifier, reciprocal_rank_fusion, tokenize
+from rag.bm25 import BM25, identifiers, reciprocal_rank_fusion
 from rag.chunking import Chunk
 from rag.config import Settings
 
@@ -44,6 +44,7 @@ class VectorStore:
         self._ollama = ollama.Client(host=settings.ollama_host)
         self._collection = self._get_collection()
         self._bm25: tuple[list[str], BM25] | None = None
+        self._heading_ids: dict[str, set[str]] = {}
         self._bm25_key: tuple | None = None
 
     def _get_collection(self):
@@ -113,6 +114,8 @@ class VectorStore:
             # lets the section *named* "D13" outrank sections that only mention D13 in passing.
             corpus = [f"{m.get('section', '')}\n{d}" for d, m in zip(data["documents"], data["metadatas"], strict=True)]
             self._bm25 = (data["ids"], BM25(corpus))
+            self._heading_ids = {cid: identifiers(m.get("section", "").split(" > ")[-1])
+                                 for cid, m in zip(data["ids"], data["metadatas"], strict=True)}
             self._bm25_key = key
         return self._bm25
 
@@ -134,9 +137,15 @@ class VectorStore:
         else:
             all_ids, bm25 = self._keyword_index()
             keyword_ids = [all_ids[i] for i in bm25.top(query, pool)]
-            # Exact identifiers (D13, BR-05) are where embeddings are weakest, so trust keywords more.
-            keyword_weight = 2.0 if any(is_identifier(t) for t in tokenize(query)) else 1.0
-            ids = reciprocal_rank_fusion([vector_ids, keyword_ids], weights=[1.0, keyword_weight])[:k]
+            # Exact identifiers (D13, BR-05, 0.10.0) are where embeddings are weakest, so trust keywords more.
+            query_ids = identifiers(query)
+            keyword_weight = 2.0 if query_ids else 1.0
+            fused = reciprocal_rank_fusion([vector_ids, keyword_ids], weights=[1.0, keyword_weight])
+            # A section whose own heading carries the exact code asked about ("0.10.0", "D13 — ...")
+            # goes first. Fusion alone favours passages that appear in both rankings, so many
+            # near-misses (0.10.1, 0.10.2, ...) outranked the exact match.
+            pinned = [cid for cid in keyword_ids if query_ids & self._heading_ids.get(cid, set())]
+            ids = (pinned + [cid for cid in fused if cid not in pinned])[:k]
 
         via = {i: "both" if i in vector_ids and i in keyword_ids else ("keyword" if i in keyword_ids else "meaning")
                for i in ids}
@@ -157,22 +166,41 @@ class VectorStore:
                             section=meta.get("section", ""), via=via[chunk_id], id=chunk_id))
         return hits
 
-    def first_chunks_under(self, source: str, parent: str, query: str) -> list[Hit]:
-        """The first chunk of every direct child section of `parent` in `source`, in document order.
-        Used to give list questions ("every module") one passage per item instead of the top-k."""
+    def outline(self, source: str) -> list[tuple[str, str]]:
+        """(chunk_id, section path) for every chunk of `source`, in document order."""
         data = self._collection.get(where={"source": source}, include=["metadatas"])
-        prefix = parent + " > "
-        first: dict[str, tuple[tuple[int, int], str]] = {}
+        rows = []
         for chunk_id, meta in zip(data["ids"], data["metadatas"], strict=True):
-            section = meta.get("section", "")
-            if not section.startswith(prefix):
-                continue
-            child = section[len(prefix):].split(" > ")[0]
             match = _ORDER.search(chunk_id)
             order = (int(match.group(1)), int(match.group(2))) if match else (0, 0)
-            if child not in first or order < first[child][0]:
-                first[child] = (order, chunk_id)
-        ids = [chunk_id for _, chunk_id in sorted(first.values())]
+            rows.append((order, chunk_id, meta.get("section", "")))
+        return [(chunk_id, section) for _, chunk_id, section in sorted(rows)]
+
+    def hits_for(self, ids: list[str], query: str, via: str) -> list[Hit]:
         if not ids:
             return []
-        return self._hits(ids, self.embed([query], kind="query")[0], dict.fromkeys(ids, "section"))
+        return self._hits(ids, self.embed([query], kind="query")[0], dict.fromkeys(ids, via))
+
+    def similarities(self, query: str, texts: list[str]) -> list[float]:
+        """Cosine similarity between a query and short texts, using the same embedding model."""
+        q = np.asarray(self.embed([query], kind="query")[0], dtype=float)
+        vectors = np.asarray(self.embed(texts, kind="document"), dtype=float)
+        norms = np.linalg.norm(vectors, axis=1) * (np.linalg.norm(q) or 1.0)
+        return [float(s) for s in (vectors @ q) / np.where(norms == 0, 1.0, norms)]
+
+
+def children_in_outline(outline: list[tuple[str, str]], parent: str) -> list[tuple[str, str]]:
+    """Direct sub-sections of `parent` as (name, first chunk id), in document order.
+    parent "" means the top level of the file, for documents without a single title heading."""
+    first: dict[str, str] = {}
+    for chunk_id, section in outline:
+        if not section:
+            continue
+        if parent:
+            if not section.startswith(parent + " > "):
+                continue
+            child = section[len(parent) + 3:].split(" > ")[0]
+        else:
+            child = section.split(" > ")[0]
+        first.setdefault(child, chunk_id)
+    return list(first.items())

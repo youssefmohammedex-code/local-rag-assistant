@@ -1,11 +1,12 @@
-"""List questions ("describe every module") get one passage per sub-section."""
+"""List questions ("describe every module") get one extra passage per sub-section."""
 
 import dataclasses
 
 import pytest
 
-from rag.pipeline import is_list_question, pick_list_parent
-from rag.store import Hit
+from rag.bm25 import tokenize
+from rag.pipeline import candidate_lists, describe_list, is_list_question
+from rag.store import Hit, children_in_outline
 
 
 @pytest.mark.parametrize("question,expected", [
@@ -21,67 +22,85 @@ def test_list_question_detection(question, expected):
     assert is_list_question(question) is expected
 
 
-def hit(section, source="guide.md"):
-    return Hit("text", source, 1, 0.5, section=section)
+OUTLINE = [  # (chunk id, section) in document order
+    ("g::s1::c0", "Guide"),
+    ("g::s2::c0", "Guide > Modules"),
+    ("g::s3::c0", "Guide > Modules > Module A"), ("g::s3::c1", "Guide > Modules > Module A"),
+    ("g::s4::c0", "Guide > Modules > Module B > Details"),
+    ("g::s5::c0", "Guide > Testing"),
+]
 
 
-CARDS = "Guide > 7. Module cards"
+def test_children_in_outline_are_direct_and_ordered():
+    assert children_in_outline(OUTLINE, "Guide > Modules") == [("Module A", "g::s3::c0"),
+                                                              ("Module B", "g::s4::c0")]
+    assert [n for n, _ in children_in_outline(OUTLINE, "Guide")] == ["Modules", "Testing"]
 
 
-def test_parent_with_matching_sub_headings_wins():
-    hits = [hit(f"{CARDS} > Module A — Engine"), hit("Guide > 2. Overview"), hit(f"{CARDS} > Module B — World"),
-            hit("Guide > 3. Testing"), hit(f"{CARDS} > Module C — API")]
-    assert pick_list_parent("Describe every module", hits) == ("guide.md", CARDS)
+def test_top_level_of_a_document_without_a_title():
+    outline = [("r::s1::c0", "Installation"), ("r::s2::c0", "Usage > Basics"), ("r::s3::c0", "License")]
+    assert [n for n, _ in children_in_outline(outline, "")] == ["Installation", "Usage", "License"]
 
 
-def test_heading_named_in_question_beats_bigger_section():
-    decisions = [hit(f"Guide > 15. Working decisions > D{i} — x") for i in range(1, 8)]
-    flows = [hit("Guide > 8. End-to-end flows > 8.1 Manual"), hit("Guide > 8. End-to-end flows > 8.2 AI")]
-    assert pick_list_parent("What are all the end-to-end flows?", decisions + flows)[1] == "Guide > 8. End-to-end flows"
+def test_candidate_lists_include_own_section_ancestors_and_top_level():
+    hits = [Hit("t", "g.md", 1, 0.5, section="Guide > Modules > Module A")]
+    keys = set(candidate_lists(hits, {"g.md": OUTLINE}))
+    # "Guide > Modules" (2 kids) and "Guide" (2 kids) qualify; "Module A" has none; top level has 1 ("Guide").
+    assert keys == {("g.md", "Guide > Modules"), ("g.md", "Guide")}
 
 
-def test_whole_document_can_be_the_list():
-    hits = [hit("Guide > 1. Scope"), hit("Guide > 2. Architecture"), hit("Guide > 3. Rules")]
-    assert pick_list_parent("Summarize every section of the guide", hits) == ("guide.md", "Guide")
+def test_summary_uses_full_path_so_the_document_name_does_not_decide():
+    kids = [("dataclass", "x"), ("datetime", "y")]
+    assert describe_list("orjson.md", "orjson > Types", kids) == "orjson > Types: dataclass; datetime"
+    assert describe_list("notes/README 0123456789abcdef0123456789abcdef.md", "", kids).startswith("README: ")
 
 
-def test_needs_two_distinct_sub_sections():
-    assert pick_list_parent("List everything", [hit("Guide > 1. Scope"), hit("Guide > 1. Scope")]) is None
-
-
-def _write(pipeline, text):
-    (pipeline.settings.docs_dir / "guide.md").write_text(text, encoding="utf-8")
-    pipeline.ingest()
+def overlap_scorer(question, texts):
+    """Stand-in for embedding similarity in tests: shared words."""
+    q = set(tokenize(question))
+    return [len(q & set(tokenize(t))) for t in texts]
 
 
 GUIDE = "# Guide\n\n## Intro\nOverview text.\n\n## Modules\n" + "".join(
     f"\n### Module {c} — Part {c}\nModule {c} owns component {c}. " + "Detail. " * 40 + "\n" for c in "ABCDEFGH")
 
 
-def test_list_question_returns_every_sub_section_in_document_order(pipeline):
-    _write(pipeline, GUIDE)
+def _setup(pipeline, **settings):
+    pipeline.settings = dataclasses.replace(pipeline.settings, **settings)
+    pipeline.list_scorer = overlap_scorer
+    (pipeline.settings.docs_dir / "guide.md").write_text(GUIDE, encoding="utf-8")
+    pipeline.ingest()
+
+
+def test_list_question_gets_every_sub_section_in_document_order(pipeline):
+    _setup(pipeline)
     hits = pipeline.retrieve("Describe every module", k=4)
-    sections = [h.section for h in hits]
-    expected = [f"Guide > Modules > Module {c} — Part {c}" for c in "ABCDEFGH"]
-    assert set(expected) <= set(sections)
-    expanded = [s for s, h in zip(sections, hits, strict=True) if h.via == "section"]
-    assert expanded == [s for s in expected if s in expanded]  # document order
+    sections = {h.section for h in hits}
+    assert {f"Guide > Modules > Module {c} — Part {c}" for c in "ABCDEFGH"} <= sections
+    expanded = [h.section for h in hits if h.via == "section"]
+    assert expanded == sorted(expanded)  # document order (A..H)
+
+
+def test_expansion_is_additive_never_drops_normal_results(pipeline):
+    _setup(pipeline)
+    normal = pipeline.store.search("Describe every module", 4, "hybrid")
+    expanded = pipeline.retrieve("Describe every module", k=4)
+    assert [h.id for h in expanded[:4]] == [h.id for h in normal]
 
 
 def test_expansion_respects_the_character_budget(pipeline):
-    pipeline.settings = dataclasses.replace(pipeline.settings, list_char_budget=3000)
-    _write(pipeline, GUIDE)
-    hits = pipeline.retrieve("Describe every module", k=4)
-    assert sum(len(h.text) for h in hits) <= 3000 + 1000 * 3  # top hits + trimmed items
-    assert any(h.text.endswith(" …") for h in hits if h.via == "section")
+    _setup(pipeline, list_char_budget=2000)
+    hits = pipeline.retrieve("Describe every module", k=2)
+    assert sum(len(h.text) for h in hits) <= 2000
+    items = [h for h in hits if h.via == "section"]
+    assert items and all(h.text.endswith(" …") for h in items)  # trimmed to fit
 
 
 def test_precise_questions_are_unchanged(pipeline):
-    _write(pipeline, GUIDE)
+    _setup(pipeline)
     assert all(h.via != "section" for h in pipeline.retrieve("Who owns component C?", k=4))
 
 
 def test_expansion_can_be_switched_off(pipeline):
-    pipeline.settings = dataclasses.replace(pipeline.settings, expand_lists=False)
-    _write(pipeline, GUIDE)
+    _setup(pipeline, expand_lists=False)
     assert len(pipeline.retrieve("Describe every module", k=4)) == 4

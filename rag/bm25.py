@@ -24,7 +24,15 @@ IDENTIFIER_BOOST = 3.0  # query terms like "d13", "br-05", "v2.1" are what the u
 
 
 def is_identifier(token: str) -> bool:
-    return any(c.isdigit() for c in token) and any(c.isalpha() for c in token)
+    """Exact codes: digits mixed with letters (d13, br-05, v2.1) or digits joined by - . :
+    (version 0.10.0, date 2026-10-08, python 3.9). Plain numbers ("500") and words are not."""
+    has_digit = any(c.isdigit() for c in token)
+    return has_digit and (any(c.isalpha() for c in token) or bool(_SPLIT.search(token)))
+
+
+def identifiers(text: str) -> set[str]:
+    """Whole exact codes in a text ("v2.14.0", "0.10.0", "d13"), never their split parts ("v2")."""
+    return {m.group() for m in _TOKEN.finditer(text.lower()) if is_identifier(m.group())}
 
 
 def tokenize(text: str) -> list[str]:
