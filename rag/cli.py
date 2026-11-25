@@ -11,11 +11,12 @@ from rag.config import Settings
 from rag.errors import friendly_error
 from rag.loaders import pretty_source
 from rag.pipeline import MODES, RAGPipeline
+from rag.store import SEARCH_MODES
 
 
 def _settings(args: argparse.Namespace) -> Settings:
     overrides = {}
-    for name in ("chunk_size", "chunk_overlap", "top_k", "llm_model", "answer_mode"):
+    for name in ("chunk_size", "chunk_overlap", "top_k", "llm_model", "answer_mode", "retrieval"):
         value = getattr(args, name, None)
         if value is not None:
             overrides[name] = value
@@ -42,7 +43,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
     print("\n\nSources:")
     for i, hit in enumerate(hits, start=1):
         where = hit.section.split(" > ")[-1] if hit.section else f"p.{hit.page}"
-        print(f"  [{i}] {pretty_source(hit.source)} · {where}  (similarity {hit.score:.2f})")
+        print(f"  [{i}] {pretty_source(hit.source)} · {where}  (similarity {hit.score:.2f}, via {hit.via})")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -58,6 +59,8 @@ def main(argv: list[str] | None = None) -> None:
     ask.add_argument("-k", "--top-k", dest="top_k", type=int)
     ask.add_argument("--model", dest="llm_model")
     ask.add_argument("--mode", dest="answer_mode", choices=sorted(MODES), help="answer length (default: detailed)")
+    ask.add_argument("--retrieval", choices=SEARCH_MODES,
+                     help="hybrid = meaning + keywords (default), vector = meaning only")
     ask.set_defaults(func=cmd_ask)
 
     args = parser.parse_args(argv)

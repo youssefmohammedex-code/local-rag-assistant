@@ -27,6 +27,7 @@ The project also includes an **evaluation harness** that measures how chunking c
 |---|---|---|
 | Embeddings | `nomic-embed-text` (137M params) | Strong retrieval quality, fast on CPU, uses task prefixes |
 | Vector store | Chroma (persistent, cosine) | Zero setup, stores metadata for citations |
+| Hybrid search | Embeddings + BM25 keyword search, merged with Reciprocal Rank Fusion | Embeddings blur exact IDs ("D13" vs "D21"); keywords catch them. BM25 is written from scratch with identifier boosting and heading boosting |
 | LLM | `qwen2.5:7b` (swappable; `llama3.2:3b` for speed) | Most accurate in the model comparison below; fits in 16 GB RAM without a GPU |
 | Chunking | Custom boundary-aware sliding window | Cuts at paragraph, sentence or word boundaries, with overlap |
 | Markdown structure | Heading-aware sections + contextual headers | Each chunk is prefixed with its heading path (e.g. `Guide > 7. Modules > Module C`), so a passage keeps its meaning after it is cut out |
@@ -65,6 +66,7 @@ python -m rag ingest
 ```bash
 python -m rag ask "What GPA do I need for the Dean's Honor List?"            # detailed answer
 python -m rag ask --mode concise "How much does late registration cost?"
+python -m rag ask --retrieval vector "..."   # compare against meaning-only search
 streamlit run app.py          # or use the DocChat UI (upload files, pick model and answer length)
 ```
 
@@ -102,6 +104,30 @@ Run on the included sample documents (12 questions, `llama3.2:3b` as both genera
 
 **Prompt engineering note:** the first prompt labelled passages as `[1] (source, p. 1)` and ended with `Answer:`. `llama3.2:3b` often replied with only the label `[1] (sample/student-handbook.md, p. 1)`. Wrapping passages in `<passage id=…>` tags and putting explicit answer instructions *after* the question fixed it.
 
+### Retrieval comparison: vector-only vs hybrid
+
+This is scored at the **passage level**: a hit only counts if the retrieved passage contains the answer, not just the right document (document-level scores were 100% everywhere). Settings: k=4, 1000-character chunks.
+
+| Question set | Retrieval | hit@1 | hit@4 | MRR | Latency |
+|---|---|---|---|---|---|
+| Sample docs, 12 questions | vector | 83% | 100% | 0.92 | ~0.2 s |
+| Sample docs, 12 questions | hybrid | 83% | 100% | 0.92 | ~0.2 s |
+| Private architecture docs, **20 held-out questions** | vector | 55% | 70% | 0.63 | ~0.15 s |
+| Private architecture docs, **20 held-out questions** | hybrid | **70%** | **95%** | **0.83** | ~0.15 s |
+
+Broken down on the held-out set:
+
+| Question type | vector hit@4 | hybrid hit@4 | vector MRR | hybrid MRR |
+|---|---|---|---|---|
+| Asks about an ID (*"What is D19 about?"*), 10 questions | 4/10 | 9–10/10 | 0.30 | 0.78 |
+| Plain language (*"How is an incident's status determined?"*), 10 questions | 10/10 | 10/10 | 0.95 | 0.90 |
+
+**Findings:**
+- **Embeddings can't tell identifiers apart:** "decision D13" and "decision D21" look almost the same to the embedding model. Vector search never found D13, D16 or D27 in its top 10.
+- **Plain BM25 wasn't enough.** In "What did decision D13 *decide*?", the rare word "decide" outweighed "D13". The fix: boost identifier-like query terms (letters + digits), count the section heading twice so the section *named* D13 beats sections that merely mention it, and weight the keyword ranking higher when the question contains an identifier.
+- **Honest trade-off:** on plain-language questions, hybrid pushed one answer from rank 1 to 2 (MRR 0.95 → 0.90). It still always lands in the top 4.
+- **Avoiding self-deception:** the heuristics above were tuned on 5 queries, then measured on 20 *different* held-out questions. Tuning also exposed a real bug: the candidate pool depended on k, so asking for 4 passages could miss what 10 passages found. A fixed pool of 50 makes the ranking consistent: the top 4 is always the start of the top 10. The cost is one ID question at k=4 (10/10 → 9/10), which I kept rather than tuning on the held-out set.
+
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
 Both models were tested with the same retrieval (1000-character chunks, k=4, Concise mode). `qwen2.5:7b` judged every answer, and the private set was also **checked by hand** because a model judging its own answers can be biased. Every answer is saved to `eval/results/*_answers.jsonl` so the grading can be audited.
@@ -130,6 +156,7 @@ Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chu
 | `RAG_EMBED_MODEL` | `nomic-embed-text` |
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `1000` / `150` (best config in the eval) |
 | `RAG_ANSWER_MODE` | `detailed` (or `concise`) |
+| `RAG_RETRIEVAL` | `hybrid` (or `vector`) |
 | `RAG_TOP_K` | per mode: `10` detailed, `4` concise |
 | `RAG_NUM_CTX` | `8192` |
 | `RAG_DOCS_DIR` | `data/docs` |
@@ -158,12 +185,12 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 37 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 50 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
 
-- [ ] Hybrid search (BM25 + vectors) and compare against pure vector search
+- [x] Hybrid search (BM25 + vectors) and compare against pure vector search
 - [ ] Cross-encoder re-ranking of the top-k passages
 - [ ] Arabic document support (multilingual embedding model) and evaluation
 - [ ] Answer caching and incremental re-indexing

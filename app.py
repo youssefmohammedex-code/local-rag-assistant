@@ -64,6 +64,8 @@ section[data-testid="stSidebar"] .doc {font-size: .84rem; padding: .3rem .1rem;
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
+VIA_LABEL = {"keyword": "keyword match · ", "both": "keyword + meaning · ", "meaning": ""}
+
 EXAMPLES = [
     "Give me an overview of what these documents cover.",
     "What are the key decisions, and why were they made?",
@@ -103,7 +105,8 @@ def source_cards(hits: list[Hit], answer: str) -> str:
         cards.append(
             f'<div class="src {"cited" if i + 1 in used else ""}">'
             f'<div class="src-head"><span class="src-title">[{i + 1}] {html.escape(title)}</span>'
-            f'<span class="src-score">{"cited · " if i + 1 in used else ""}{h.score:.0%} match</span></div>'
+            f'<span class="src-score">{"cited · " if i + 1 in used else ""}{VIA_LABEL.get(h.via, "")}'
+            f'{h.score:.0%} match</span></div>'
             f'<div class="src-path">{html.escape(where)}</div>'
             f'<div class="src-text">{html.escape(snippet)}</div>'
             f'<div class="bar"><div style="width:{max(h.score, 0) * 100:.0f}%"></div></div></div>'
@@ -164,6 +167,10 @@ with st.sidebar:
     with st.expander("Advanced"):
         top_k = st.slider("Passages to retrieve", 1, 20, MODES[mode].k,
                           help="More passages give the model more to work with, but answers take longer.")
+        search_label = st.radio("Search", ["Hybrid", "Meaning only"], horizontal=True,
+                                help="Hybrid combines meaning-based search with keyword search, so exact "
+                                     "IDs and names (e.g. D13, BR-05) are found too.")
+        retrieval = "hybrid" if search_label == "Hybrid" else "vector"
 
     pipeline = get_pipeline(model)
     indexed = set(pipeline.store.sources())
@@ -216,7 +223,7 @@ st.markdown(
     <div class="pills">
       <span class="pill {status}"><b>{len(indexed)}</b>&nbsp;documents · <b>{chunk_count}</b>&nbsp;passages</span>
       <span class="pill">Model&nbsp;<b>{html.escape(model)}</b></span>
-      <span class="pill">Mode&nbsp;<b>{mode}</b> · k={top_k}</span>
+      <span class="pill">Mode&nbsp;<b>{mode}</b> · k={top_k} · {search_label.lower()} search</span>
     </div>""",
     unsafe_allow_html=True,
 )
@@ -260,7 +267,7 @@ if question:
             try:
                 start = time.perf_counter()
                 with st.spinner("Searching your documents…"):
-                    hits = pipeline.retrieve(question, top_k)
+                    hits = pipeline.retrieve(question, top_k, retrieval)
                 placeholder, text, last_paint = st.empty(), "", 0.0
                 placeholder.markdown('<span class="meta">Thinking…</span>', unsafe_allow_html=True)
                 for token in pipeline.stream(question, hits, mode=mode):
