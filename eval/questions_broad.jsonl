@@ -1,0 +1,2 @@
+{"question": "List every section of the student handbook.", "expected_items": ["1. Registration and Credit Hours", "2. Adding and Dropping Courses", "3. Grading System", "4. Academic Standing and Probation", "5. Attendance", "6. Examinations", "7. Graduation Requirements", "8. Contact"]}
+{"question": "What are all the lab safety rules?", "expected_items": ["General Rules", "Electronics Laboratory", "Chemistry and Materials Laboratory", "Emergencies", "Equipment Borrowing"]}

@@ -58,6 +58,13 @@ def rank_of_expected(hits: list[Hit], expected_source: str | None, expected_page
     return None
 
 
+def coverage(hits: list[Hit], expected_items: list[str]) -> float:
+    """Share of the items a complete answer must mention that appear in any retrieved passage.
+    This is the metric for broad questions ("list every module"), where one relevant hit isn't enough."""
+    context = "\n".join(h.text for h in hits).lower()
+    return sum(item.lower() in context for item in expected_items) / len(expected_items)
+
+
 def judge(pipeline: RAGPipeline, question: str, reference: str, answer: str, hits: list[Hit],
           judge_model: str | None = None) -> dict:
     context = "\n\n".join(h.text for h in hits)
@@ -84,11 +91,18 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
         n_chunks = pipeline.store.count()
 
     ranks, latencies, faithful, correct, gen_seconds, log = [], [], [], [], [], []
+    coverages, context_chars = [], []
     for q in questions:
         start = time.perf_counter()
         hits = pipeline.retrieve(q["question"], k)
         latencies.append(time.perf_counter() - start)
-        ranks.append(rank_of_expected(hits, q.get("expected_source"), q.get("expected_page"), q.get("expected_text")))
+        context_chars.append(sum(len(h.text) for h in hits))
+        if q.get("expected_items"):
+            coverages.append(coverage(hits, q["expected_items"]))
+            ranks.append(None)
+        else:
+            ranks.append(rank_of_expected(hits, q.get("expected_source"), q.get("expected_page"),
+                                          q.get("expected_text")))
         if use_judge:
             start = time.perf_counter()
             answer = pipeline.generate(q["question"], hits, mode=mode)
@@ -104,6 +118,7 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
     row = {
         "llm": settings.llm_model,
         "retrieval": settings.retrieval,
+        "expand": "on" if settings.expand_lists else "off",
         "chunk_size": settings.chunk_size,
         "overlap": settings.chunk_overlap,
         "chunks": n_chunks,
@@ -111,7 +126,13 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
         f"hit@{k}": sum(r is not None for r in ranks) / n,
         "MRR": sum(1 / r for r in ranks if r) / n,
         "retrieval_ms": 1000 * statistics.mean(latencies),
+        "context_chars": statistics.mean(context_chars),
     }
+    if coverages:  # broad questions: report coverage instead of rank metrics
+        for key in ("hit@1", f"hit@{k}", "MRR"):
+            row.pop(key)
+        row["coverage"] = statistics.mean(coverages)
+        row["per_question"] = " ".join(f"{c:.0%}" for c in coverages)
     if use_judge:
         row["faithfulness"] = sum(faithful) / n
         row["correctness"] = sum(correct) / n
@@ -156,6 +177,8 @@ def main() -> None:
     parser.add_argument("--out", default="results", help="output file name (without extension)")
     parser.add_argument("--retrieval", nargs="+", default=None, choices=["hybrid", "vector"],
                         help="compare retrieval methods (default: the configured one)")
+    parser.add_argument("--expand", nargs="+", default=None, choices=["on", "off"],
+                        help="compare list-question expansion on/off (default: the configured one)")
     args = parser.parse_args()
 
     questions = load_questions(args.questions)
@@ -164,11 +187,14 @@ def main() -> None:
     for model in args.models or [base.llm_model]:
         for size in args.sizes:
             for retrieval in args.retrieval or [base.retrieval]:
-                settings = dataclasses.replace(base, llm_model=model, chunk_size=size, retrieval=retrieval,
-                                               chunk_overlap=int(size * args.overlap_ratio))
-                print(f"Evaluating llm={model} chunk_size={size} retrieval={retrieval} ...", flush=True)
-                rows.append(evaluate_config(settings, questions, args.k, args.judge, args.reingest,
-                                            args.judge_model, args.mode))
+                for expand in args.expand or ["on" if base.expand_lists else "off"]:
+                    settings = dataclasses.replace(base, llm_model=model, chunk_size=size, retrieval=retrieval,
+                                                   expand_lists=expand == "on",
+                                                   chunk_overlap=int(size * args.overlap_ratio))
+                    print(f"Evaluating llm={model} chunk_size={size} retrieval={retrieval} expand={expand} ...",
+                          flush=True)
+                    rows.append(evaluate_config(settings, questions, args.k, args.judge, args.reingest,
+                                                args.judge_model, args.mode))
 
     judge_desc = f"on ({args.judge_model or 'self-graded'})" if args.judge else "off"
     meta = (f"Questions: {len(questions)} · embed: `{base.embed_model}` · k={args.k} · "

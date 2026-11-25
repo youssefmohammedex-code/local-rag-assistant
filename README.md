@@ -31,6 +31,7 @@ The project also includes an **evaluation harness** that measures how chunking c
 | LLM | `qwen2.5:7b` (swappable; `llama3.2:3b` for speed) | Most accurate in the model comparison below; fits in 16 GB RAM without a GPU |
 | Chunking | Custom boundary-aware sliding window | Cuts at paragraph, sentence or word boundaries, with overlap |
 | Markdown structure | Heading-aware sections + contextual headers | Each chunk is prefixed with its heading path (e.g. `Guide > 7. Modules > Module C`), so a passage keeps its meaning after it is cut out |
+| List questions | Section expansion: *"describe every module"* gets one passage per sub-section, trimmed to fit a ~16k-character budget | Top-k similarity returns the k most similar passages, which cluster on a few items, so it can't answer "every X" |
 | Answer modes | **Detailed** (k=10, structured Markdown) / **Concise** (k=4, 1–3 sentences) | Broad questions ("describe every module…") need more context and room to answer |
 | Context window | `num_ctx=8192` | Ollama's default is too small for 10 passages plus a long answer |
 | UI | Streamlit "DocChat": streaming answers, citation badges, source cards with match scores, document upload, model picker | |
@@ -128,6 +129,31 @@ Broken down on the held-out set:
 - **Honest trade-off:** on plain-language questions, hybrid pushed one answer from rank 1 to 2 (MRR 0.95 → 0.90). It still always lands in the top 4.
 - **Avoiding self-deception:** the heuristics above were tuned on 5 queries, then measured on 20 *different* held-out questions. Tuning also exposed a real bug: the candidate pool depended on k, so asking for 4 passages could miss what 10 passages found. A fixed pool of 50 makes the ranking consistent: the top 4 is always the start of the top 10. The cost is one ID question at k=4 (10/10 → 9/10), which I kept rather than tuning on the held-out set.
 
+### List questions: section expansion
+
+Questions like *"describe every module"* or *"list all the decisions"* need **every** item, but top-k retrieval returns the k most *similar* passages, which cluster on a few items. With k=10, the retrieved text contained only 22% of the modules and 23% of the decisions.
+
+**How it works:**
+1. Detect list questions (*all / every / each / list*).
+2. Retrieve 20 candidates and decide which section they belong to. Every heading level counts as a possible "list". Each one is scored by how many of its sub-sections appear among the candidates, multiplied by how well the question matches its own heading and its sub-headings ("every module" → "Module A", "Module B", …).
+3. Keep the 3 best direct hits, then add the **first passage of every sub-section** in document order. Each is trimmed so the whole list fits a ~16k-character budget, leaving room in the context window for a long answer. A 26-item list gets short items; a 3-item list gets full ones.
+
+**Coverage** is the share of required items that appear anywhere in the retrieved text (k=10):
+
+| Question set | Expansion off | Expansion on |
+|---|---|---|
+| Private docs: 6 tuning questions | 47% | **100%** |
+| Private docs: **4 held-out questions** (written after tuning) | 73% | **100%** |
+| Sample docs: 2 questions | 94% | **100%** |
+| Precise questions (hit@k / MRR) | unchanged | unchanged |
+
+**Findings:**
+- **"The section with the most sub-sections" is the wrong rule on its own.** For *"what are all the end-to-end flows?"*, it picked the 26-decision section, because more of its items were among the candidates, and coverage fell from 100% to 33%. Weighting by how well the question matches each heading fixed it.
+- **For *"every module"*, the whole document competed with its "Module cards" section.** The deciding signal was that *every* sub-heading of the cards section echoes the question ("Module A", "Module B", …).
+- **Overfitting checks:** the weights were tuned on 6 questions, then checked on 4 held-out ones (including one where the whole document is the correct answer). A unit test later found a stress case where a large unrelated section takes all the top candidates. Giving a matching heading more weight fixed it, and every benchmark was re-run with identical results.
+- **End-to-end answer:** with expansion, qwen2.5:7b's answer to *"describe every module, who owns it, and what it is responsible for"* covered **all 9 modules with the correct owner** (hand-checked), each with purpose, inputs, outputs and responsibilities: 1,071 words with a citation per module. Without expansion it covered 8 of 9 and invented a generic "interactions" line. One flaw remains: a filler "Rules: none specified" line under each module.
+- **Cost:** that answer took about **10 minutes on CPU** (1,775 tokens at 3.6 tok/s), because complete answers to big lists are long. List questions also send about 40% more text to the model (~11k vs ~7.7k characters), so the first word appears later on CPU. A question that merely contains "each" or "all" can trigger expansion. Its ranking is unaffected, but it sends a bit more text.
+
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
 Both models were tested with the same retrieval (1000-character chunks, k=4, Concise mode). `qwen2.5:7b` judged every answer, and the private set was also **checked by hand** because a model judging its own answers can be biased. Every answer is saved to `eval/results/*_answers.jsonl` so the grading can be audited.
@@ -157,6 +183,7 @@ Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chu
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `1000` / `150` (best config in the eval) |
 | `RAG_ANSWER_MODE` | `detailed` (or `concise`) |
 | `RAG_RETRIEVAL` | `hybrid` (or `vector`) |
+| `RAG_EXPAND_LISTS` / `RAG_LIST_CHAR_BUDGET` | `1` / `16000` (set `0` to disable list expansion) |
 | `RAG_TOP_K` | per mode: `10` detailed, `4` concise |
 | `RAG_NUM_CTX` | `8192` |
 | `RAG_DOCS_DIR` | `data/docs` |
@@ -185,7 +212,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 50 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 65 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
