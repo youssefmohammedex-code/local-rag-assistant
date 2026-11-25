@@ -15,6 +15,7 @@ data/chroma_eval/
 
 # Eval questions/results about private documents
 eval/*private*
+eval/results/*private*
 
 # Editors / OS
 .vscode/

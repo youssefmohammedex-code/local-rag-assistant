@@ -75,7 +75,7 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
     else:
         n_chunks = pipeline.store.count()
 
-    ranks, latencies, faithful, correct, gen_seconds = [], [], [], [], []
+    ranks, latencies, faithful, correct, gen_seconds, log = [], [], [], [], [], []
     for q in questions:
         start = time.perf_counter()
         hits = pipeline.retrieve(q["question"], k)
@@ -88,6 +88,9 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
             verdict = judge(pipeline, q["question"], q.get("reference_answer", ""), answer, hits, judge_model)
             faithful.append(verdict["faithful"])
             correct.append(verdict["correct"])
+            log.append({"llm": settings.llm_model, "chunk_size": settings.chunk_size,
+                        "question": q["question"], "reference": q.get("reference_answer", ""),
+                        "answer": answer, **verdict, "seconds": round(gen_seconds[-1], 1)})
 
     n = len(questions)
     row = {
@@ -104,11 +107,17 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
         row["faithfulness"] = sum(faithful) / n
         row["correctness"] = sum(correct) / n
         row["answer_s"] = statistics.mean(gen_seconds)
+    row["_log"] = log
     return row
 
 
 def write_results(rows: list[dict], meta: str, name: str = "results") -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    # Every generated answer with its verdict, so the judge can be checked by hand.
+    answers = [entry for r in rows for entry in r.pop("_log", [])]
+    if answers:
+        with (RESULTS_DIR / f"{name}_answers.jsonl").open("w", encoding="utf-8") as f:
+            f.writelines(json.dumps(a, ensure_ascii=False) + "\n" for a in answers)
     with (RESULTS_DIR / f"{name}.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
