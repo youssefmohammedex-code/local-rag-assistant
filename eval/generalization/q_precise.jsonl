@@ -1,0 +1,30 @@
+{"question": "How can I stop load_dotenv from reading .env files in production without changing the code that calls it?", "expected_text": "PYTHON_DOTENV_DISABLED", "type": "semantic"}
+{"question": "If a key appears in my .env file with no equals sign, what value does dotenv_values give it?", "expected_text": "associating that variable name with the value", "type": "semantic"}
+{"question": "With override turned off, which wins: the variable already in the environment or the one in the .env file?", "expected_text": "override=False", "type": "semantic"}
+{"question": "Can a quoted value in a .env file span several lines?", "expected_text": "span multiple lines", "type": "semantic"}
+{"question": "Which command prints the variables in JSON format?", "expected_text": "dotenv list --format=json", "type": "semantic"}
+{"question": "What changed in python-dotenv 0.10.0?", "expected_text": "Add support for trailing comments", "type": "id"}
+{"question": "What range of integers can orjson handle by default?", "expected_text": "18446744073709551615", "type": "semantic"}
+{"question": "How do I make orjson raise an error for integers that web browsers cannot represent exactly?", "expected_text": "OPT_STRICT_INTEGER", "type": "semantic"}
+{"question": "What format does orjson use when writing datetime objects?", "expected_text": "RFC 3339", "type": "semantic"}
+{"question": "Does orjson output a str or bytes?", "expected_text": "is the correct type for a serialized blob", "type": "semantic"}
+{"question": "Is JSON Lines supported by orjson?", "expected_text": "orjsonl", "type": "semantic"}
+{"question": "What option is needed to serialize numpy arrays with orjson?", "expected_text": "OPT_SERIALIZE_NUMPY", "type": "semantic"}
+{"question": "What version constraint should I put in requirements.txt for orjson?", "expected_text": "orjson >= 3.10,<4", "type": "semantic"}
+{"question": "What are the two ways MultipleOf can be interpreted?", "expected_text": "JSONschema semantics", "type": "semantic"}
+{"question": "How do I say a datetime must be naive?", "expected_text": "Timezone(None)", "type": "semantic"}
+{"question": "How do I express both a lower and an upper bound in one constraint?", "expected_text": "Interval(gt, ge, lt, le)", "type": "semantic"}
+{"question": "What happened to typer-slim?", "expected_text": "now simply installs", "type": "semantic"}
+{"question": "How can I turn off Rich formatting in Typer globally?", "expected_text": "TYPER_USE_RICH", "type": "semantic"}
+{"question": "Which package does Typer use to detect the shell when installing completion?", "expected_text": "shellingham", "type": "semantic"}
+{"question": "How do I reduce tqdm log spam in CI jobs?", "expected_text": "TQDM_MININTERVAL=5", "type": "semantic"}
+{"question": "What is the default maximum interval between tqdm display refreshes?", "expected_text": "maxinterval=10.0", "type": "semantic"}
+{"question": "Under which license is the bundled OpenBLAS distributed?", "expected_text": "Name: OpenBLAS", "type": "semantic"}
+{"question": "What license covers the GCC runtime library shipped with numpy?", "expected_text": "GCC-exception-3.1", "type": "semantic"}
+{"question": "Which Python version does httpcore require?", "expected_text": "Python 3.8+", "type": "semantic"}
+{"question": "Which async backends does httpcore support?", "expected_text": "Async backend support for", "type": "semantic"}
+{"question": "How do I install httpcore with HTTP/2 and SOCKS support?", "expected_text": "asyncio,trio,http2,socks", "type": "semantic"}
+{"question": "When is charset-normalizer's language detection unreliable?", "expected_text": "two or more languages sharing identical letters", "type": "semantic"}
+{"question": "What detection accuracy does charset-normalizer report in its benchmark?", "expected_text": "98 %", "type": "semantic"}
+{"question": "Which Python versions did pydantic v2.14.0 drop and add?", "expected_text": "drops support for Python 3.9", "type": "id"}
+{"question": "What is in the pydantic v2.13.4 release?", "expected_text": "v2.13.4", "type": "id"}

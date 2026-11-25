@@ -31,7 +31,7 @@ The project also includes an **evaluation harness** that measures how chunking c
 | LLM | `qwen2.5:7b` (swappable; `llama3.2:3b` for speed) | Most accurate in the model comparison below; fits in 16 GB RAM without a GPU |
 | Chunking | Custom boundary-aware sliding window | Cuts at paragraph, sentence or word boundaries, with overlap |
 | Markdown structure | Heading-aware sections + contextual headers | Each chunk is prefixed with its heading path (e.g. `Guide > 7. Modules > Module C`), so a passage keeps its meaning after it is cut out |
-| List questions | Section expansion: *"describe every module"* gets one passage per sub-section, trimmed to fit a ~16k-character budget | Top-k similarity returns the k most similar passages, which cluster on a few items, so it can't answer "every X" |
+| List questions | Additive section expansion: *"describe every module"* keeps the normal top-k and adds one passage per sub-section, within a ~20k-character budget | Top-k similarity returns the k most similar passages, which cluster on a few items, so it can't answer "every X" |
 | Answer modes | **Detailed** (k=10, structured Markdown) / **Concise** (k=4, 1–3 sentences) | Broad questions ("describe every module…") need more context and room to answer |
 | Context window | `num_ctx=8192` | Ollama's default is too small for 10 passages plus a long answer |
 | UI | Streamlit "DocChat": streaming answers, citation badges, source cards with match scores, document upload, model picker | |
@@ -115,6 +115,9 @@ This is scored at the **passage level**: a hit only counts if the retrieved pass
 | Sample docs, 12 questions | hybrid | 83% | 100% | 0.92 | ~0.2 s |
 | Private architecture docs, **20 held-out questions** | vector | 55% | 70% | 0.63 | ~0.15 s |
 | Private architecture docs, **20 held-out questions** | hybrid | **70%** | **95%** | **0.83** | ~0.15 s |
+| Private architecture docs, 20 held-out questions | hybrid + exact-code headings (see below) | **90%** | **100%** | **0.95** | ~0.2 s |
+| Third-party package docs (Markdown, TXT, PDF), **30 blind questions** | vector | 57% | 80% | 0.67 | ~0.15 s |
+| Third-party package docs (Markdown, TXT, PDF), **30 blind questions** | hybrid + exact-code headings | **70%** | **87%** | **0.76** | ~0.2 s |
 
 Broken down on the held-out set:
 
@@ -127,32 +130,72 @@ Broken down on the held-out set:
 - **Embeddings can't tell identifiers apart:** "decision D13" and "decision D21" look almost the same to the embedding model. Vector search never found D13, D16 or D27 in its top 10.
 - **Plain BM25 wasn't enough.** In "What did decision D13 *decide*?", the rare word "decide" outweighed "D13". The fix: boost identifier-like query terms (letters + digits), count the section heading twice so the section *named* D13 beats sections that merely mention it, and weight the keyword ranking higher when the question contains an identifier.
 - **Honest trade-off:** on plain-language questions, hybrid pushed one answer from rank 1 to 2 (MRR 0.95 → 0.90). It still always lands in the top 4.
+- **Exact codes in headings go first.** A later test on third-party docs showed that *"What changed in python-dotenv **0.10.0**?"* still failed. BM25 ranked the 0.10.0 section 1st, but fusion favours passages found by *both* rankings, so 0.10.1, 0.10.2 and other entries pushed it out of the top 10. The identifier rule also only knew letter+digit codes like "D13" and not versions like `0.10.0`. Now any code with digits (letters mixed in, or joined by `.` `-` `:`) counts as exact. A section whose own heading carries the exact code from the question goes first. On the 20 held-out questions this raised hit@1 from 70% to **90%** and hit@4 from 95% to **100%**. On 30 questions about third-party docs, hit@4 went from 83% to 87%.
 - **Avoiding self-deception:** the heuristics above were tuned on 5 queries, then measured on 20 *different* held-out questions. Tuning also exposed a real bug: the candidate pool depended on k, so asking for 4 passages could miss what 10 passages found. A fixed pool of 50 makes the ranking consistent: the top 4 is always the start of the top 10. The cost is one ID question at k=4 (10/10 → 9/10), which I kept rather than tuning on the held-out set.
 
 ### List questions: section expansion
 
 Questions like *"describe every module"* or *"list all the decisions"* need **every** item, but top-k retrieval returns the k most *similar* passages, which cluster on a few items. With k=10, the retrieved text contained only 22% of the modules and 23% of the decisions.
 
-**How it works:**
+**How it works (current version):**
 1. Detect list questions (*all / every / each / list*).
-2. Retrieve 20 candidates and decide which section they belong to. Every heading level counts as a possible "list". Each one is scored by how many of its sub-sections appear among the candidates, multiplied by how well the question matches its own heading and its sub-headings ("every module" → "Module A", "Module B", …).
-3. Keep the 3 best direct hits, then add the **first passage of every sub-section** in document order. Each is trimmed so the whole list fits a ~16k-character budget, leaving room in the context window for a long answer. A 26-item list gets short items; a 3-item list gets full ones.
+2. Retrieve 20 candidates. Each one's own section, every ancestor heading, and the file's top level (for documents without a title) count as a possible "list".
+3. Summarize each possible list as its **full heading path plus its sub-headings** (*"orjson > Types: dataclass; datetime; enum; …"*). The summary most similar to the question, using the same embedding model as search, is the list. There are no hand-tuned weights.
+4. **Additive by design:** keep exactly the normal top-k passages, then add the first passage of every sub-section in document order, trimmed to fit a ~20k-character total budget.
 
-**Coverage** is the share of required items that appear anywhere in the retrieved text (k=10):
+**Coverage** is the share of required items that appear anywhere in the retrieved text (k=10), measured on 26 list questions across 3 document sets:
 
 | Question set | Expansion off | Expansion on |
 |---|---|---|
-| Private docs: 6 tuning questions | 47% | **100%** |
-| Private docs: **4 held-out questions** (written after tuning) | 73% | **100%** |
-| Sample docs: 2 questions | 94% | **100%** |
-| Precise questions (hit@k / MRR) | unchanged | unchanged |
+| Private architecture docs: 6 questions | 47% | 87% |
+| Private architecture docs: 4 held-out questions | 73% | 92% |
+| Sample docs: 2 questions | 94% | 100% |
+| Third-party package docs: 6 questions | 59% | 78% |
+| Third-party package docs: 5 held-out questions | 79% | 89% |
+| Third-party package docs: 3 fresh questions (written last, never used for design) | 67% | 83% |
+| **All 26 questions** | **66%** | **87%** |
+| Questions worse than with expansion off | — | **0 of 26** |
 
-**Findings:**
-- **"The section with the most sub-sections" is the wrong rule on its own.** For *"what are all the end-to-end flows?"*, it picked the 26-decision section, because more of its items were among the candidates, and coverage fell from 100% to 33%. Weighting by how well the question matches each heading fixed it.
-- **For *"every module"*, the whole document competed with its "Module cards" section.** The deciding signal was that *every* sub-heading of the cards section echoes the question ("Module A", "Module B", …).
-- **Overfitting checks:** the weights were tuned on 6 questions, then checked on 4 held-out ones (including one where the whole document is the correct answer). A unit test later found a stress case where a large unrelated section takes all the top candidates. Giving a matching heading more weight fixed it, and every benchmark was re-run with identical results.
-- **End-to-end answer:** with expansion, qwen2.5:7b's answer to *"describe every module, who owns it, and what it is responsible for"* covered **all 9 modules with the correct owner** (hand-checked), each with purpose, inputs, outputs and responsibilities: 1,071 words with a citation per module. Without expansion it covered 8 of 9 and invented a generic "interactions" line. One flaw remains: a filler "Rules: none specified" line under each module.
-- **Cost:** that answer took about **10 minutes on CPU** (1,775 tokens at 3.6 tok/s), because complete answers to big lists are long. List questions also send about 40% more text to the model (~11k vs ~7.7k characters), so the first word appears later on CPU. A question that merely contains "each" or "all" can trigger expansion. Its ranking is unaffected, but it sends a bit more text.
+**How it got here (an overfitting story):**
+- **v1 used hand-tuned weights.** It scored 100% on the private docs, including held-out questions, but those questions all came from the same 3 documents. On new third-party documents it made some list questions **worse** than no expansion: held-out coverage fell from 79% to 67%, and the Typer README fell from 57% to 14%. Questions that name a product ("all the types *orjson* can serialize") matched the document title, so the whole document was "the list".
+- **v2 chose the section by embedding similarity of "heading: sub-headings" summaries.** It was better on new documents but still picked the whole document when a question named the product, because only the document summary contained that name.
+- **v3 adds the full heading path to every summary** (the same idea as the passage headers). It was better on unseen documents and slightly worse on the original private docs. No selection rule won everywhere: **deciding which section a question wants listed is genuinely ambiguous.**
+- **The final change made expansion additive.** It never removes a normal result, only adds, so a wrong pick costs context space, not answers. Across all 26 questions, no question scored lower than with expansion off.
+
+**Cost:** list questions send roughly twice the text to the model (about 8–15k characters instead of 5–8k), so on CPU the first word appears later, and complete answers to long lists are long. The earlier v1 answer to *"describe every module…"* covered all 9 modules with the correct owners but took about 10 minutes on CPU.
+
+### Generalization test: documents the system was never tuned on
+
+**Why:** every design choice above was tuned on one set of documents, so the results could be overfitting. To test that, I built a second corpus from documents I didn't write: the README/manual files of 9 installed Python packages.
+
+**The corpus** (~400 KB, 777 passages, 3 file types):
+- Markdown: pydantic, python-dotenv, orjson, typer, charset-normalizer, annotated-types
+- Plain text: the RST-formatted tqdm manual, and numpy's bundled licenses
+- A 14-page PDF made from httpcore's README
+
+**The questions** were written by reading the documents *before* running any search:
+- 30 precise questions
+- 14 list questions in three batches (design, held-out, and fresh, written last)
+- 3 questions the documents can't answer
+
+**What it found:**
+- **Overfitting in list expansion:** its hand-tuned v1 made some list questions *worse* on new documents (see above), which led to the additive redesign.
+- **Overfitting in the identifier rule:** it only knew "D13"-style codes and missed versions like `0.10.0`.
+- **6 file-handling bugs** your own documents never triggered: encoding, setext headings, BOM, front matter, lock files, and unsupported files being dropped silently.
+
+**End-to-end answers** (qwen2.5:7b, Concise mode, hand-graded, 13 answerable and 3 unanswerable questions):
+
+| Result | Count |
+|---|---|
+| Correct, with citation | **11 / 13** |
+| Retrieval missed, model said "I don't know" (no hallucination) | 2 / 13 → 1 after the exact-code fix (the remaining one is a PDF) |
+| **Made-up answers** | **0** |
+| Unanswerable questions correctly refused | **3 / 3** |
+
+**Known remaining weaknesses:**
+- **PDFs have no headings,** so their passages carry no section context and rank lower. "Which Python version does httpcore require?" sits at rank 5, so it's missed in Concise mode and found in Detailed mode.
+- **Vocabulary mismatch can hurt hybrid search:** for "JSON Lines" vs "JSONL", vector-only search found it at rank 2 and hybrid didn't.
+- **Questions that don't name their subject are ambiguous:** in "Which command prints the variables in JSON format?", orjson is *about* JSON.
 
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
@@ -206,13 +249,21 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Reliability
 
 - **Re-indexing is safe:** all embeddings are computed before the old index is replaced. If Ollama is down mid-way, or the docs folder is empty or misconfigured, the existing index is kept. This was a real bug found by testing failure cases: a failed re-index used to wipe the index.
-- **Nothing fails silently:** files with no extractable text (empty files, corrupt PDFs, scanned PDFs that need OCR) are reported, and replacing an uploaded file is announced.
+- **Nothing fails silently:** files with no extractable text (empty files, corrupt PDFs, scanned PDFs that need OCR) and unsupported files (.docx, .html, …) are reported, and replacing an uploaded file is announced.
+- **Real-world file quirks:** an edge-case audit of 23 crafted files found and fixed:
+  - Windows-1252 text that was silently losing every accented letter and smart quote
+  - setext headings (`Title` + `===`) that weren't recognized
+  - UTF-8 BOMs that hid the first heading
+  - YAML front matter that was indexed as content
+  - Office lock files (`~$x.md`) and hidden folders (`.obsidian/`) that were indexed
+
+  The fixes were checked to leave every existing document's output unchanged.
 - **Actionable errors:** the CLI and the app show messages like *"Can't reach Ollama…"* or *"The model `x` isn't installed. Run `ollama pull x`"* instead of stack traces.
 
 ## Tests
 
 ```bash
-pytest          # 65 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 87 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap

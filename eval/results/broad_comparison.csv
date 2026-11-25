@@ -1,3 +1,3 @@
 llm,retrieval,expand,chunk_size,overlap,chunks,retrieval_ms,context_chars,coverage,per_question
-qwen2.5:7b,hybrid,off,1000,150,15,1089.11010005977,4240,0.9375,88% 100%
-qwen2.5:7b,hybrid,on,1000,150,15,1154.5323500176892,3200.5,1.0,100% 100%
+qwen2.5:7b,hybrid,off,1000,150,15,1059.2174500925466,4240,0.9375,88% 100%
+qwen2.5:7b,hybrid,on,1000,150,15,1249.7517500305548,3275,1.0,100% 100%
