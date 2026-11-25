@@ -1,0 +1,17 @@
+{"question": "Which Python version does httpcore require?", "expected_text": "Python 3.8+"}
+{"question": "What are httpcore's required dependencies?", "expected_text": "has the following dependencies"}
+{"question": "Why would someone use httpcore directly instead of a higher-level client?", "expected_text": "proxy service in Python"}
+{"question": "What changed in httpcore 1.0.5?", "expected_text": "1.0.5 (March 27th, 2024)"}
+{"question": "Which package is needed for HTTP/2 support in httpcore?", "expected_text": "\u2019h2\u2019 - Required by"}
+{"question": "What is the minimum Python version for Rich?", "expected_text": "Rich requires Python 3.8 or later"}
+{"question": "How do I test Rich output in my terminal?", "expected_text": "test Rich output on your terminal"}
+{"question": "What library does Rich use for syntax highlighting?", "expected_text": "library to implement syntax highlighting"}
+{"question": "Does Rich work in Jupyter notebooks?", "expected_text": "with no additional configuration required"}
+{"question": "What does Rich's inspect function do?", "expected_text": "produce a report on any Python object"}
+{"question": "How many colors does the classic Windows terminal support?", "expected_text": "limited to 16 colors"}
+{"question": "How do I install pandas with conda?", "expected_text": "conda install -c conda-forge pandas"}
+{"question": "Where can I find the list of changes between pandas releases?", "expected_text": "list of changes to pandas between each release"}
+{"question": "What does pandas aim to become?", "expected_text": "most powerful and flexible open-source data"}
+{"question": "How do I auto-format the fsspec code?", "expected_text": "black fsspec"}
+{"question": "What is fsspec?", "expected_text": "A specification for pythonic filesystems"}
+{"question": "How do I set up pre-commit hooks for fsspec?", "expected_text": "pre-commit install --install-hooks"}

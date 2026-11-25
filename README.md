@@ -27,7 +27,9 @@ The project also includes an **evaluation harness** that measures how chunking c
 |---|---|---|
 | Embeddings | `nomic-embed-text` (137M params) | Strong retrieval quality, fast on CPU, uses task prefixes |
 | Vector store | Chroma (persistent, cosine) | Zero setup, stores metadata for citations |
-| Hybrid search | Embeddings + BM25 keyword search, merged with Reciprocal Rank Fusion | Embeddings blur exact IDs ("D13" vs "D21"); keywords catch them. BM25 is written from scratch with identifier boosting and heading boosting |
+| Hybrid search | Embeddings + BM25 keyword search (Snowball-stemmed), merged with Reciprocal Rank Fusion | Embeddings blur exact IDs ("D13" vs "D21"); keywords catch them. BM25 is written from scratch with identifier boosting and heading boosting |
+| PDF structure | Headings detected from font size/weight, running headers/footers removed, sections that continue across pages | PDF text has no markup, so without this PDF passages had no headings and were cited only by page |
+| Tiny sections | A section under 400 characters ("Requirements: Python 3.8+") borrows the following text for context but keeps its own heading | A 20-character passage is a weak match next to longer passages that mention the same words |
 | LLM | `qwen2.5:7b` (swappable; `llama3.2:3b` for speed) | Most accurate in the model comparison below; fits in 16 GB RAM without a GPU |
 | Chunking | Custom boundary-aware sliding window | Cuts at paragraph, sentence or word boundaries, with overlap |
 | Markdown structure | Heading-aware sections + contextual headers | Each chunk is prefixed with its heading path (e.g. `Guide > 7. Modules > Module C`), so a passage keeps its meaning after it is cut out |
@@ -193,8 +195,45 @@ Questions like *"describe every module"* or *"list all the decisions"* need **ev
 | Unanswerable questions correctly refused | **3 / 3** |
 
 **Known remaining weaknesses:**
-- **PDFs have no headings,** so their passages carry no section context and rank lower. "Which Python version does httpcore require?" sits at rank 5, so it's missed in Concise mode and found in Detailed mode.
 - **Vocabulary mismatch can hurt hybrid search:** for "JSON Lines" vs "JSONL", vector-only search found it at rank 2 and hybrid didn't.
+- **PDF list questions:** see the PDF section below.
+
+### PDFs: recovering structure
+
+**The problem:** PDF text extraction returns flat lines per page, so PDF passages had no headings and were cited only by page number. On top of that, every page's running header and "Page N" footer added noise. On 17 blind questions over 4 test PDFs, **hybrid search was worse than vector-only** (hit@4 88% vs 94%): the keyword boosts that help Markdown had nothing to work with.
+
+**The test PDFs** are built like real documents: headings in larger bold fonts, body text, code in a monospace font, and a running header and page footer on every page. They're made from 3 package READMEs, plus one **plain single-font PDF** with no styling at all (see `eval/generalization/make_pdfs.py`).
+
+**What changed:**
+1. **Headings from fonts.** Each line's font size and weight is read. The body size is learned per document, and lines noticeably larger, or bold at body size, become headings, with bigger fonts at higher levels. Single-font PDFs fall back to numbered headings ("2.1 Setup") and otherwise stay page-based instead of inventing structure.
+2. **Running headers and footers are removed:** short lines that repeat at the top or bottom of most pages.
+3. **Sections continue across page breaks.** Each page of a section is its own piece, so citations read *"Dependencies, p.2"*.
+4. **Tiny sections borrow context.** I tried three options; borrowing context was the only one that didn't hurt Markdown:
+
+   | Option | PDF hit@4 | Third-party Markdown hit@4 | Third-party lists |
+   |---|---|---|---|
+   | Off | 88% | 87% | 78% |
+   | Merge small sections | 94% | **80%** ⬇ | **61%** ⬇ (merged changelog entries lost their headings, breaking exact-version lookup and list expansion) |
+   | **Borrow context from the following sections** | 88% | 87% | 81% |
+5. **Stemmed keywords** (Snowball). The question "require" didn't match the heading "Requirements".
+
+**Results** (hybrid, k=4; PDFs with all changes):
+
+| | Before | After |
+|---|---|---|
+| PDF questions found first (hit@1) | 59% | **71%** |
+| PDF questions in the top 4 (hit@4) | 88% | **100%** |
+| PDF MRR | 0.73 | **0.83** |
+| Third-party Markdown hit@4 | 87% | **90%** |
+| Your-docs held-out hit@1 | 90% | 85% (one question dropped one rank) |
+| PDF list coverage | **76%** | 59% |
+
+**End-to-end with qwen2.5:7b** on the PDF questions that failed before:
+- *"Which Python version does httpcore require?"* went from "I don't know" to **"HTTP Core requires Python 3.8+"**.
+- *"What does pandas aim to become?"* went from "I don't know" to the correct answer, cited as *"What is it?, p.1"*.
+- *"What changed in httpcore 1.0.5?"* is now correct, cited as *"1.0.5 (March 27th, 2024), p.3"*.
+
+**Honest trade-off:** PDF list questions got worse (76% → 59%). A whole PDF page happened to pack in many changelog entries; per-section passages depend on list expansion choosing the right section. For *"every httpcore release"*, it picked one release's "Added / Fixed" sub-list over the whole changelog by 0.793 to 0.791 cosine similarity. I chose not to add another hand-tuned tie-break rule, since that's what overfit before.
 - **Questions that don't name their subject are ambiguous:** in "Which command prints the variables in JSON format?", orjson is *about* JSON.
 
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
@@ -263,7 +302,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 87 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 100 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap

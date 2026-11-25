@@ -30,6 +30,8 @@ python eval/generalization/audit_files.py ../edge
 | `q_lists_heldout.jsonl` | 5 list questions written before the redesign |
 | `q_lists_fresh.jsonl` | 3 list questions written last and never used for design decisions |
 | `q_ood.jsonl` | 3 questions the docs cannot answer (the model should refuse) |
+| `make_pdfs.py` | realistic test PDFs (heading fonts, running header/footer) + one plain single-font PDF |
+| `q_pdf_precise.jsonl`, `q_pdf_lists.jsonl` | 17 precise + 2 list questions about those PDFs, written before any search |
 | `write_*.py` | how the question files were generated (expected items come from the real heading structure) |
 
 Package versions differ between machines, so exact numbers may vary slightly. The questions only
