@@ -36,6 +36,9 @@ class Settings:
     # num_ctx for a long answer.
     expand_lists: bool = field(default_factory=lambda: os.getenv("RAG_EXPAND_LISTS", "1") != "0")
     list_char_budget: int = field(default_factory=lambda: _env_int("RAG_LIST_CHAR_BUDGET", 20000))
+    # How detailed answers to list questions are generated: "checklist" (the model is shown the
+    # outline of the expanded sections so it cannot silently skip one), "single" or "per-item".
+    list_answers: str = field(default_factory=lambda: os.getenv("RAG_LIST_ANSWERS", "checklist"))
     # Ollama's default context window is small; 10 passages + a long answer needs more room.
     num_ctx: int = field(default_factory=lambda: _env_int("RAG_NUM_CTX", 8192))
     temperature: float = 0.1

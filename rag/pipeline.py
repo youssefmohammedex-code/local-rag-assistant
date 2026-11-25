@@ -96,10 +96,11 @@ def describe_list(source: str, parent: str, kids: list) -> str:
 CITATION_RULE ='After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
 
 
-def build_prompt(question: str, hits: list[Hit], mode: str = "detailed") -> str:
+def build_prompt(question: str, hits: list[Hit], mode: str = "detailed", ids: list[int] | None = None,
+                 instructions: str | None = None) -> str:
     # XML-style tags keep small models from copying passage headers into the answer.
     blocks = []
-    for i, h in enumerate(hits, start=1):
+    for i, h in zip(ids or range(1, len(hits) + 1), hits, strict=True):
         attrs = f'id="{i}" source="{pretty_source(h.source)}"'
         if h.section:
             attrs += f' section="{h.section}"'
@@ -107,7 +108,43 @@ def build_prompt(question: str, hits: list[Hit], mode: str = "detailed") -> str:
             attrs += f' page="{h.page}"'
         blocks.append(f"<passage {attrs}>\n{h.text}\n</passage>")
     context = "\n\n".join(blocks) if blocks else "(no context found)"
-    return f"{context}\n\nQuestion: {question}\n\n{MODES[mode].instructions} {CITATION_RULE}"
+    return f"{context}\n\nQuestion: {question}\n\n{instructions or MODES[mode].instructions} {CITATION_RULE}"
+
+
+@dataclass
+class ListItem:
+    """One item of a list answer: a sub-section and the retrieved passages (1-based ids) about it."""
+    name: str
+    path: str
+    passages: list[int]
+
+
+LIST_ANSWERS = ("checklist", "single", "per-item")  # see RAGPipeline.stream
+LIST_ITEMS_PER_CALL = 3  # per-item answers: sections per model call
+
+
+def checklist_instructions(items: list[ListItem]) -> str:
+    """Show the model the outline of the expanded list(s) so it cannot silently skip items.
+    Deliberately soft: retrieval expands two candidate lists and one is often unrelated, and a
+    strict "exactly these headings" version forced that list into the answer (orjson FAQ 100% -> 80%).
+    Tried and reverted: listing each section's passage ids. It did not stop invented content (httpcore
+    guide) and lowered coverage on 3 of 13 questions."""
+    headings = "\n".join(f"### {item.name}" for item in items)
+    return ("The passages come from these sections of the documents, in this order:\n"
+            f"{headings}\n"
+            "Use the sections that answer the question as headings, in this order, and do not skip any "
+            "of them: go through the list to the end, and when unsure whether a section is relevant, "
+            "include it. Leave out only sections clearly unrelated to the question. If the items the "
+            "question asks for are listed inside a section's text rather than as sections, use those "
+            "items as headings instead. Under each heading write 1-3 bullet points using only the "
+            "passages from that section. Do not move examples or facts between headings.")
+
+
+def per_item_instructions(items: list[ListItem]) -> str:
+    names = "; ".join(item.name for item in items)
+    return (f"Answer the question separately for each of these sections: {names}. "
+            "For each one, write a \"### <section name>\" heading followed by 1-3 bullet points, using only "
+            "the passages about that section. Do not add any other headings or an introduction.")
 
 
 @dataclass
@@ -139,10 +176,13 @@ class RAGPipeline:
         self.settings = settings or Settings()
         if self.settings.answer_mode not in MODES:
             raise ValueError(f"answer_mode must be one of {sorted(MODES)}")
+        if self.settings.list_answers not in LIST_ANSWERS:
+            raise ValueError(f"list_answers must be one of {list(LIST_ANSWERS)}")
         self.store = VectorStore(self.settings)
         self._llm = ollama.Client(host=self.settings.ollama_host)
         self.last_stats = GenerationStats()
         self.list_scorer = self.store.similarities  # (question, texts) -> scores; replaceable in tests
+        self._list_plans: dict[str, list[tuple[str, str, list]]] = {}  # question -> lists picked at retrieval
 
     def ingest(self, reset: bool = True) -> IngestReport:
         """Load, chunk and embed every document, then replace the index.
@@ -213,6 +253,9 @@ class RAGPipeline:
         picked = self.pick_lists(question, candidates)
         if not picked:
             return candidates[:k]
+        if len(self._list_plans) > 100:
+            self._list_plans.clear()
+        self._list_plans[question] = picked
         # A parent's sub-section and its child's first item can start with the same passage: dedupe by id.
         chunk_ids = list(dict.fromkeys(cid for _, _, node_kids in picked for _, cid in node_kids))
         # Additive by design: keep exactly the normal top-k and only add list items in the space
@@ -232,29 +275,64 @@ class RAGPipeline:
             used += len(item.text)
         return top + expanded
 
-    def _request(self, question: str, hits: list[Hit], mode: str | None) -> dict:
+    def list_items(self, question: str, hits: list[Hit]) -> list[ListItem]:
+        """The list a question was expanded into, as items with the passages about each one.
+        Empty when retrieval did not treat it as a list question."""
+        items: dict[str, ListItem] = {}
+        for source, parent, kids in self._list_plans.get(question, []):
+            for name, _ in kids:
+                path = f"{parent} > {name}" if parent else name
+                if path in items:
+                    continue
+                passages = [i for i, h in enumerate(hits, start=1)
+                            if h.source == source and (h.section == path or h.section.startswith(path + " > "))]
+                if passages:
+                    items[path] = ListItem(name, path, passages)
+        return list(items.values())
+
+    def _request(self, question: str, hits: list[Hit], mode: str | None, ids: list[int] | None = None,
+                 instructions: str | None = None) -> dict:
+        prompt = build_prompt(question, hits, mode or self.settings.answer_mode, ids=ids, instructions=instructions)
         return {
             "model": self.settings.llm_model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_prompt(question, hits, mode or self.settings.answer_mode)},
-            ],
+            "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
             "options": {"temperature": self.settings.temperature, "num_ctx": self.settings.num_ctx},
         }
 
     def generate(self, question: str, hits: list[Hit], mode: str | None = None) -> str:
-        response = self._llm.chat(**self._request(question, hits, mode))
-        return response["message"]["content"].strip()
+        return "".join(self.stream(question, hits, mode)).strip()
 
-    def stream(self, question: str, hits: list[Hit], mode: str | None = None) -> Iterator[str]:
-        self.last_stats = GenerationStats()
-        for part in self._llm.chat(**self._request(question, hits, mode), stream=True):
+    def _stream_call(self, request: dict) -> Iterator[str]:
+        for part in self._llm.chat(**request, stream=True):
             if part.get("done"):
                 self.last_stats = GenerationStats(
-                    tokens=part.get("eval_count") or 0,
-                    seconds=(part.get("eval_duration") or 0) / 1e9,
+                    tokens=self.last_stats.tokens + (part.get("eval_count") or 0),
+                    seconds=self.last_stats.seconds + (part.get("eval_duration") or 0) / 1e9,
                 )
             yield part["message"]["content"]
+
+    def stream(self, question: str, hits: list[Hit], mode: str | None = None) -> Iterator[str]:
+        """Stream an answer. Detailed answers to list questions use the configured list strategy
+        (settings.list_answers): "single" one call, "checklist" one call that must use exactly the
+        list's headings, or "per-item" one call per few items with only those items' passages."""
+        self.last_stats = GenerationStats()
+        mode = mode or self.settings.answer_mode
+        strategy = self.settings.list_answers
+        items = self.list_items(question, hits) if mode == "detailed" and strategy != "single" else []
+        if not items:
+            yield from self._stream_call(self._request(question, hits, mode))
+            return
+        if strategy == "checklist":
+            yield from self._stream_call(self._request(question, hits, mode,
+                                                       instructions=checklist_instructions(items)))
+            return
+        for start in range(0, len(items), LIST_ITEMS_PER_CALL):
+            batch = items[start:start + LIST_ITEMS_PER_CALL]
+            ids = sorted({i for item in batch for i in item.passages})
+            request = self._request(question, [hits[i - 1] for i in ids], mode, ids=ids,
+                                    instructions=per_item_instructions(batch))
+            yield from self._stream_call(request)
+            yield "\n\n"
 
     def answer(self, question: str, k: int | None = None, mode: str | None = None) -> Answer:
         hits = self.retrieve(question, k or self.default_k(mode))

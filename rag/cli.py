@@ -10,13 +10,13 @@ import time
 from rag.config import Settings
 from rag.errors import friendly_error
 from rag.loaders import pretty_source
-from rag.pipeline import MODES, RAGPipeline
+from rag.pipeline import LIST_ANSWERS, MODES, RAGPipeline
 from rag.store import SEARCH_MODES
 
 
 def _settings(args: argparse.Namespace) -> Settings:
     overrides = {}
-    for name in ("chunk_size", "chunk_overlap", "top_k", "llm_model", "answer_mode", "retrieval"):
+    for name in ("chunk_size", "chunk_overlap", "top_k", "llm_model", "answer_mode", "retrieval", "list_answers"):
         value = getattr(args, name, None)
         if value is not None:
             overrides[name] = value
@@ -66,6 +66,9 @@ def main(argv: list[str] | None = None) -> None:
     ask.add_argument("--mode", dest="answer_mode", choices=sorted(MODES), help="answer length (default: detailed)")
     ask.add_argument("--retrieval", choices=SEARCH_MODES,
                      help="hybrid = meaning + keywords (default), vector = meaning only")
+    ask.add_argument("--list-answers", dest="list_answers", choices=LIST_ANSWERS,
+                     help="list questions: checklist = outline of the sections (default), single = plain answer, "
+                          "per-item = one model call per few sections")
     ask.set_defaults(func=cmd_ask)
 
     args = parser.parse_args(argv)
