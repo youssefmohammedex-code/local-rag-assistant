@@ -23,7 +23,7 @@ class Settings:
     db_dir: Path = field(default_factory=lambda: Path(os.getenv("RAG_DB_DIR", ROOT / "data" / "chroma")))
     ollama_host: str = field(default_factory=lambda: os.getenv("OLLAMA_HOST", "http://localhost:11434"))
     embed_model: str = field(default_factory=lambda: os.getenv("RAG_EMBED_MODEL", "nomic-embed-text"))
-    llm_model: str = field(default_factory=lambda: os.getenv("RAG_LLM_MODEL", "llama3.2:3b"))
+    llm_model: str = field(default_factory=lambda: os.getenv("RAG_LLM_MODEL", "qwen2.5:7b"))
     chunk_size: int = field(default_factory=lambda: _env_int("RAG_CHUNK_SIZE", 1000))
     chunk_overlap: int = field(default_factory=lambda: _env_int("RAG_CHUNK_OVERLAP", 150))
     # "detailed" or "concise". Each mode has its own default number of passages (see pipeline.MODES).

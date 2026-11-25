@@ -18,7 +18,7 @@ The project also includes an **evaluation harness** that measures how chunking c
                                    │
                     numbered context + question
                                    ▼
-                     LLM (llama3.2:3b via Ollama)
+                     LLM (qwen2.5:7b via Ollama)
                                    ▼
                      answer with [n] citations
 ```
@@ -27,7 +27,7 @@ The project also includes an **evaluation harness** that measures how chunking c
 |---|---|---|
 | Embeddings | `nomic-embed-text` (137M params) | Strong retrieval quality, fast on CPU, uses task prefixes |
 | Vector store | Chroma (persistent, cosine) | Zero setup, stores metadata for citations |
-| LLM | `llama3.2:3b` (swappable) | Runs comfortably in 16 GB RAM without a GPU |
+| LLM | `qwen2.5:7b` (swappable; `llama3.2:3b` for speed) | Most accurate in the model comparison below; fits in 16 GB RAM without a GPU |
 | Chunking | Custom boundary-aware sliding window | Cuts at paragraph, sentence or word boundaries, with overlap |
 | Markdown structure | Heading-aware sections + contextual headers | Each chunk is prefixed with its heading path (e.g. `Guide > 7. Modules > Module C`), so a passage keeps its meaning after it is cut out |
 | Answer modes | **Detailed** (k=10, structured Markdown) / **Concise** (k=4, 1–3 sentences) | Broad questions ("describe every module…") need more context and room to answer |
@@ -42,7 +42,8 @@ The project also includes an **evaluation harness** that measures how chunking c
 
 ```bash
 ollama pull nomic-embed-text
-ollama pull llama3.2:3b
+ollama pull qwen2.5:7b        # default (4.7 GB)
+ollama pull llama3.2:3b       # optional: ~2.5x faster, less accurate (2.0 GB)
 ```
 
 **2. Set up Python (3.10+):**
@@ -101,13 +102,31 @@ Run on the included sample documents (12 questions, `llama3.2:3b` as both genera
 
 **Prompt engineering note:** the first prompt labelled passages as `[1] (source, p. 1)` and ended with `Answer:`. `llama3.2:3b` often replied with only the label `[1] (sample/student-handbook.md, p. 1)`. Wrapping passages in `<passage id=…>` tags and putting explicit answer instructions *after* the question fixed it.
 
+### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
+
+Both models were tested with the same retrieval (1000-character chunks, k=4, Concise mode). `qwen2.5:7b` judged every answer, and the private set was also **checked by hand** because a model judging its own answers can be biased. Every answer is saved to `eval/results/*_answers.jsonl` so the grading can be audited.
+
+| Question set | Model | Correct (hand-checked) | Faithfulness (judge) | Avg. answer time |
+|---|---|---|---|---|
+| Sample docs, 12 questions | llama3.2:3b | 100% (judge) | 91.7% | 11.6 s |
+| Sample docs, 12 questions | qwen2.5:7b | 100% (judge) | 100% | 29.3 s |
+| Private 110 KB architecture docs, 8 questions | llama3.2:3b | **7 / 8** | 62.5% | 15.1 s |
+| Private 110 KB architecture docs, 8 questions | qwen2.5:7b | **8 / 8** | 87.5% | 37.0 s |
+
+**Findings:**
+- **On the easy sample set, the models tie on correctness**, so harder, realistic documents were needed to tell them apart.
+- **On the real docs, llama3.2:3b named the wrong owner for one module**, even though every retrieved passage named the right person. It also padded another answer with an unrelated name, and once cited a section heading instead of a passage number. qwen2.5:7b answered all 8 correctly, with clean citations.
+- **The judge is imperfect:** it marked one of qwen's correct, well-cited answers as unfaithful. That's why the hand check matters.
+- **Broad question in Detailed mode:** llama3.2:3b wrote 559 words but mixed data contracts into the module list. qwen2.5:7b wrote a cleaner 360-word answer with the correct owner and responsibilities for 8 of the 9 modules, but missed one module and repeated a generic "interactions" line.
+- **Trade-off:** qwen2.5:7b is about 2.5x slower on CPU (about 4 tok/s vs 6–8 tok/s). Correctness matters more for a document assistant, so it is the default. The DocChat model picker switches to llama3.2:3b for speed.
+
 ## Configuration
 
 Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chunk-overlap`, `-k` and `--model`:
 
 | Variable | Default |
 |---|---|
-| `RAG_LLM_MODEL` | `llama3.2:3b` |
+| `RAG_LLM_MODEL` | `qwen2.5:7b` |
 | `RAG_EMBED_MODEL` | `nomic-embed-text` |
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `1000` / `150` (best config in the eval) |
 | `RAG_ANSWER_MODE` | `detailed` (or `concise`) |
