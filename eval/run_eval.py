@@ -50,10 +50,11 @@ def rank_of_expected(hits: list[Hit], expected_source: str, expected_page: int |
     return None
 
 
-def judge(pipeline: RAGPipeline, question: str, reference: str, answer: str, hits: list[Hit]) -> dict:
+def judge(pipeline: RAGPipeline, question: str, reference: str, answer: str, hits: list[Hit],
+          judge_model: str | None = None) -> dict:
     context = "\n\n".join(h.text for h in hits)
     response = pipeline._llm.chat(
-        model=pipeline.settings.llm_model,
+        model=judge_model or pipeline.settings.llm_model,
         messages=[{"role": "user", "content": JUDGE_PROMPT.format(
             context=context, question=question, reference=reference, answer=answer)}],
         format="json",
@@ -66,27 +67,31 @@ def judge(pipeline: RAGPipeline, question: str, reference: str, answer: str, hit
         return {"faithful": False, "correct": False}
 
 
-def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge: bool, reingest: bool) -> dict:
+def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge: bool, reingest: bool,
+                    judge_model: str | None = None, mode: str = "concise") -> dict:
     pipeline = RAGPipeline(settings)
     if reingest or pipeline.store.count() == 0:
         n_chunks = pipeline.ingest(reset=True)
     else:
         n_chunks = pipeline.store.count()
 
-    ranks, latencies, faithful, correct = [], [], [], []
+    ranks, latencies, faithful, correct, gen_seconds = [], [], [], [], []
     for q in questions:
         start = time.perf_counter()
         hits = pipeline.retrieve(q["question"], k)
         latencies.append(time.perf_counter() - start)
         ranks.append(rank_of_expected(hits, q["expected_source"], q.get("expected_page")))
         if use_judge:
-            answer = pipeline.generate(q["question"], hits)
-            verdict = judge(pipeline, q["question"], q.get("reference_answer", ""), answer, hits)
+            start = time.perf_counter()
+            answer = pipeline.generate(q["question"], hits, mode=mode)
+            gen_seconds.append(time.perf_counter() - start)
+            verdict = judge(pipeline, q["question"], q.get("reference_answer", ""), answer, hits, judge_model)
             faithful.append(verdict["faithful"])
             correct.append(verdict["correct"])
 
     n = len(questions)
     row = {
+        "llm": settings.llm_model,
         "chunk_size": settings.chunk_size,
         "overlap": settings.chunk_overlap,
         "chunks": n_chunks,
@@ -98,12 +103,13 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
     if use_judge:
         row["faithfulness"] = sum(faithful) / n
         row["correctness"] = sum(correct) / n
+        row["answer_s"] = statistics.mean(gen_seconds)
     return row
 
 
-def write_results(rows: list[dict], meta: str) -> None:
+def write_results(rows: list[dict], meta: str, name: str = "results") -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with (RESULTS_DIR / "results.csv").open("w", newline="", encoding="utf-8") as f:
+    with (RESULTS_DIR / f"{name}.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
@@ -114,7 +120,7 @@ def write_results(rows: list[dict], meta: str) -> None:
     header = "| " + " | ".join(rows[0].keys()) + " |"
     sep = "|" + "---|" * len(rows[0])
     body = ["| " + " | ".join(fmt(v) for v in r.values()) + " |" for r in rows]
-    (RESULTS_DIR / "results.md").write_text("\n".join([meta, "", header, sep, *body, ""]), encoding="utf-8")
+    (RESULTS_DIR / f"{name}.md").write_text("\n".join([meta, "", header, sep, *body, ""]), encoding="utf-8")
     print("\n".join([header, sep, *body]))
 
 
@@ -126,19 +132,27 @@ def main() -> None:
     parser.add_argument("-k", type=int, default=4)
     parser.add_argument("--judge", action="store_true", help="also grade generated answers with the LLM")
     parser.add_argument("--reingest", action="store_true", help="rebuild every index even if it exists")
+    parser.add_argument("--models", nargs="+", help="compare these LLMs (default: the configured one)")
+    parser.add_argument("--judge-model", help="grade every model with this one LLM, for a fair comparison")
+    parser.add_argument("--mode", default="concise", choices=["concise", "detailed"], help="answer mode to evaluate")
+    parser.add_argument("--out", default="results", help="output file name (without extension)")
     args = parser.parse_args()
 
     questions = load_questions(args.questions)
     base = Settings()
     rows = []
-    for size in args.sizes:
-        settings = dataclasses.replace(base, chunk_size=size, chunk_overlap=int(size * args.overlap_ratio))
-        print(f"Evaluating chunk_size={size} ...")
-        rows.append(evaluate_config(settings, questions, args.k, args.judge, args.reingest))
+    for model in args.models or [base.llm_model]:
+        for size in args.sizes:
+            settings = dataclasses.replace(base, llm_model=model, chunk_size=size,
+                                           chunk_overlap=int(size * args.overlap_ratio))
+            print(f"Evaluating llm={model} chunk_size={size} ...", flush=True)
+            rows.append(evaluate_config(settings, questions, args.k, args.judge, args.reingest,
+                                        args.judge_model, args.mode))
 
-    meta = (f"Questions: {len(questions)} · embed: `{base.embed_model}` · llm: `{base.llm_model}` · "
-            f"k={args.k} · judge={'on' if args.judge else 'off'}")
-    write_results(rows, meta)
+    judge_desc = f"on ({args.judge_model or 'self-graded'})" if args.judge else "off"
+    meta = (f"Questions: {len(questions)} · embed: `{base.embed_model}` · k={args.k} · "
+            f"mode={args.mode} · judge={judge_desc}")
+    write_results(rows, meta, args.out)
 
 
 if __name__ == "__main__":

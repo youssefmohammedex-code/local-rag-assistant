@@ -11,6 +11,10 @@ data/chroma/
 # Your private documents: only the sample folder is committed
 data/docs/*
 !data/docs/sample/
+data/chroma_eval/
+
+# Eval questions/results about private documents
+eval/*private*
 
 # Editors / OS
 .vscode/
