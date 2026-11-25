@@ -8,8 +8,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Bump when chunking/loading changes so old indexes are not silently reused.
+INDEX_VERSION = 2
 
-def _env_int(name: str, default: int) -> int:
+
+def _env_int(name: str, default: int | None) -> int | None:
     value = os.getenv(name)
     return int(value) if value else default
 
@@ -23,10 +26,14 @@ class Settings:
     llm_model: str = field(default_factory=lambda: os.getenv("RAG_LLM_MODEL", "llama3.2:3b"))
     chunk_size: int = field(default_factory=lambda: _env_int("RAG_CHUNK_SIZE", 1000))
     chunk_overlap: int = field(default_factory=lambda: _env_int("RAG_CHUNK_OVERLAP", 150))
-    top_k: int = field(default_factory=lambda: _env_int("RAG_TOP_K", 4))
+    # "detailed" or "concise". Each mode has its own default number of passages (see pipeline.MODES).
+    answer_mode: str = field(default_factory=lambda: os.getenv("RAG_ANSWER_MODE", "detailed"))
+    top_k: int | None = field(default_factory=lambda: _env_int("RAG_TOP_K", None))
+    # Ollama's default context window is small; 10 passages + a long answer needs more room.
+    num_ctx: int = field(default_factory=lambda: _env_int("RAG_NUM_CTX", 8192))
     temperature: float = 0.1
 
     @property
     def collection_name(self) -> str:
         """One collection per chunking config, so different configs can be compared side by side."""
-        return f"docs_cs{self.chunk_size}_ov{self.chunk_overlap}"
+        return f"docs_v{INDEX_VERSION}_cs{self.chunk_size}_ov{self.chunk_overlap}"

@@ -8,12 +8,13 @@ import sys
 import time
 
 from rag.config import Settings
-from rag.pipeline import RAGPipeline
+from rag.loaders import pretty_source
+from rag.pipeline import MODES, RAGPipeline
 
 
 def _settings(args: argparse.Namespace) -> Settings:
     overrides = {}
-    for name in ("chunk_size", "chunk_overlap", "top_k", "llm_model"):
+    for name in ("chunk_size", "chunk_overlap", "top_k", "llm_model", "answer_mode"):
         value = getattr(args, name, None)
         if value is not None:
             overrides[name] = value
@@ -36,7 +37,8 @@ def cmd_ask(args: argparse.Namespace) -> None:
         print(token, end="", flush=True)
     print("\n\nSources:")
     for i, hit in enumerate(hits, start=1):
-        print(f"  [{i}] {hit.source} p.{hit.page}  (similarity {hit.score:.2f})")
+        where = hit.section.split(" > ")[-1] if hit.section else f"p.{hit.page}"
+        print(f"  [{i}] {pretty_source(hit.source)} · {where}  (similarity {hit.score:.2f})")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -51,6 +53,7 @@ def main(argv: list[str] | None = None) -> None:
     ask.add_argument("question")
     ask.add_argument("-k", "--top-k", dest="top_k", type=int)
     ask.add_argument("--model", dest="llm_model")
+    ask.add_argument("--mode", dest="answer_mode", choices=sorted(MODES), help="answer length (default: detailed)")
     ask.set_defaults(func=cmd_ask)
 
     args = parser.parse_args(argv)

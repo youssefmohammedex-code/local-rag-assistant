@@ -11,10 +11,20 @@ HITS = [
 
 def test_prompt_numbers_passages_and_cites_sources():
     prompt = build_prompt("What scale?", HITS)
-    assert '<passage id="1" source="sample/student-handbook.md" page="1">' in prompt
-    assert '<passage id="2" source="sample/lab-safety-rules.md" page="1">' in prompt
+    assert '<passage id="1" source="student-handbook" page="1">' in prompt
+    assert '<passage id="2" source="lab-safety-rules" page="1">' in prompt
     assert "Question: What scale?" in prompt
     assert prompt.index("</passage>") < prompt.index("Question:")
+
+
+def test_prompt_uses_section_when_available():
+    hit = Hit("Owns the engine.", "Guide 421ffbd20ecf819b81b9f89e8cdb422a.md", 1, 0.7, section="Guide > Module A")
+    assert '<passage id="1" source="Guide" section="Guide > Module A">' in build_prompt("q", [hit])
+
+
+def test_prompt_modes_change_length_instructions():
+    assert "thorough" in build_prompt("q", HITS, mode="detailed")
+    assert "1-3 sentences" in build_prompt("q", HITS, mode="concise")
 
 
 def test_prompt_without_hits():
