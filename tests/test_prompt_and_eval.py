@@ -38,6 +38,12 @@ def test_rank_of_expected():
     assert rank_of_expected(HITS, "missing.md", None) is None
 
 
+def test_rank_of_expected_passage_level():
+    assert rank_of_expected(HITS, None, expected_text="goggles ARE") == 2  # case-insensitive
+    assert rank_of_expected(HITS, "student-handbook.md", expected_text="goggles") is None
+    assert rank_of_expected(HITS, None, expected_text="4.0 scale") == 1
+
+
 def test_loader_reads_text_files(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "notes.md").write_text("# Title\nSome content", encoding="utf-8")

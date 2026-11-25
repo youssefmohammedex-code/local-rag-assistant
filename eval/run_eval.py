@@ -42,11 +42,19 @@ def load_questions(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def rank_of_expected(hits: list[Hit], expected_source: str, expected_page: int | None) -> int | None:
-    """1-based rank of the first hit from the expected document (and page, if given)."""
+def rank_of_expected(hits: list[Hit], expected_source: str | None, expected_page: int | None = None,
+                     expected_text: str | None = None) -> int | None:
+    """1-based rank of the first relevant hit. Document-level by default; passage-level when
+    `expected_text` is given (the hit must contain it). Document-level alone saturates quickly:
+    with few documents almost every query 'finds the right document'."""
     for rank, hit in enumerate(hits, start=1):
-        if hit.source.endswith(expected_source) and (expected_page is None or hit.page == expected_page):
-            return rank
+        if expected_source and not hit.source.endswith(expected_source):
+            continue
+        if expected_page is not None and hit.page != expected_page:
+            continue
+        if expected_text and expected_text.lower() not in hit.text.lower():
+            continue
+        return rank
     return None
 
 
@@ -80,7 +88,7 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
         start = time.perf_counter()
         hits = pipeline.retrieve(q["question"], k)
         latencies.append(time.perf_counter() - start)
-        ranks.append(rank_of_expected(hits, q["expected_source"], q.get("expected_page")))
+        ranks.append(rank_of_expected(hits, q.get("expected_source"), q.get("expected_page"), q.get("expected_text")))
         if use_judge:
             start = time.perf_counter()
             answer = pipeline.generate(q["question"], hits, mode=mode)
@@ -95,6 +103,7 @@ def evaluate_config(settings: Settings, questions: list[dict], k: int, use_judge
     n = len(questions)
     row = {
         "llm": settings.llm_model,
+        "retrieval": settings.retrieval,
         "chunk_size": settings.chunk_size,
         "overlap": settings.chunk_overlap,
         "chunks": n_chunks,
@@ -145,6 +154,8 @@ def main() -> None:
     parser.add_argument("--judge-model", help="grade every model with this one LLM, for a fair comparison")
     parser.add_argument("--mode", default="concise", choices=["concise", "detailed"], help="answer mode to evaluate")
     parser.add_argument("--out", default="results", help="output file name (without extension)")
+    parser.add_argument("--retrieval", nargs="+", default=None, choices=["hybrid", "vector"],
+                        help="compare retrieval methods (default: the configured one)")
     args = parser.parse_args()
 
     questions = load_questions(args.questions)
@@ -152,11 +163,12 @@ def main() -> None:
     rows = []
     for model in args.models or [base.llm_model]:
         for size in args.sizes:
-            settings = dataclasses.replace(base, llm_model=model, chunk_size=size,
-                                           chunk_overlap=int(size * args.overlap_ratio))
-            print(f"Evaluating llm={model} chunk_size={size} ...", flush=True)
-            rows.append(evaluate_config(settings, questions, args.k, args.judge, args.reingest,
-                                        args.judge_model, args.mode))
+            for retrieval in args.retrieval or [base.retrieval]:
+                settings = dataclasses.replace(base, llm_model=model, chunk_size=size, retrieval=retrieval,
+                                               chunk_overlap=int(size * args.overlap_ratio))
+                print(f"Evaluating llm={model} chunk_size={size} retrieval={retrieval} ...", flush=True)
+                rows.append(evaluate_config(settings, questions, args.k, args.judge, args.reingest,
+                                            args.judge_model, args.mode))
 
     judge_desc = f"on ({args.judge_model or 'self-graded'})" if args.judge else "off"
     meta = (f"Questions: {len(questions)} · embed: `{base.embed_model}` · k={args.k} · "
