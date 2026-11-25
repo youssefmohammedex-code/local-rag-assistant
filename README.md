@@ -288,7 +288,7 @@ Coverage is the share of expected items found in the answer. **Every answer was 
 - **Wins:** checklist was never worse on coverage, never skipped a section that exists as a heading, and is about **2× faster**, because it doesn't pad.
 - **What it doesn't fix:**
   - **Items that live inside a section's text, not as headings,** don't benefit. orjson's 5 FAQ questions scored 100%, 80% and 60% across runs; that's run-to-run variance at temperature 0.1.
-  - **An outline can invite confident invention.** On httpcore the model wrote plausible facts with citations that don't support them. The single strategy was also wrong there, just more obviously.
+  - **An outline can invite confident invention.** On httpcore the model wrote plausible facts with citations that don't support them. The single strategy was also wrong there, just more obviously. *(Fixed below, under "Choosing between the two expanded lists".)*
 - **Tried and reverted:**
   - A strict "exactly these headings" outline: it forced unrelated sections into the answer.
   - Outlining only the best-matching list: it would break annotated-types, whose constraints are in the second-ranked list.
@@ -313,6 +313,36 @@ Coverage is the share of expected items found in the answer. **Every answer was 
 End to end, qwen2.5:7b now lists all 8 releases in order, each with its own changes; spot-checked facts match the source.
 
 Choose the strategy with `RAG_LIST_ANSWERS` or `python -m rag ask --list-answers single|checklist|per-item`. Concise mode and non-list questions always use one plain call.
+
+### Choosing between the two expanded lists (the httpcore invention)
+
+**Why the model invented content:** for *"What are all the sections of the httpcore guide?"*, retrieval expanded two lists, the guide's 7 sections and the changelog's 39 releases, because embedding similarity ranked the changelog higher. The answer had the right headings, but filled them with plausible facts taken from the 40 unrelated passages.
+
+**The fix: ask the model which list the question means, before answering.**
+- **The question:** a one-letter multiple choice ("A or B?"), which a 7B model handles far more reliably than ignoring 40 irrelevant passages.
+- **Asked in both orders:** the model leans towards one letter when unsure, so a pick counts only if both orders agree. Otherwise both lists are kept, as before.
+- **What the answer then sees:** the normal top-k passages (always kept) plus the chosen list's passages only, shown in document order.
+- **Cost:** two extra replies of about one token each.
+
+**Chooser picks on all 13 list questions:**
+- **Correct:** 11 picks.
+- **Abstained:** 2 questions, python-dotenv's use cases and Typer's example upgrade, where the orders disagreed and both lists were kept.
+- **Nothing to choose:** the Rich README expands a single list.
+- **Wrong picks:** none.
+
+| Check | Before | After |
+|---|---|---|
+| httpcore guide, 3 runs, read by hand | right headings, invented content | **all 7 sections in every run, facts match the passages** (Python 3.8+, h11/certifi, socksio, SEMVER, `httpcore==1.*`) |
+| 6 list questions used while designing | 96.7% | **100%** (orjson FAQ was 60–100% across runs) |
+| 7 held-out list questions | 5 at 100%, Typer upgrade 67%, httpcore invented | **all 7 at 100%** |
+
+One caveat on the held-out row: Typer's upgrade question is one where the chooser abstained. Its 67% → 100% change came with document order and may partly be run-to-run variance.
+
+**Known limit (not invented content):**
+- **The question:** *"List every httpcore release in the changelog."*
+- **What works:** the answer lists all 39 releases in order.
+- **What fails:** under most releases the model writes a filler bullet like "not relevant to the question", instead of that release's changes. It seems to read "list every release" as asking for names only, while the outline asks for bullets under each heading.
+- **Tried and reverted:** renumbering the passages 1..n in document order, with citations mapped back. It didn't help here, and pydantic dropped to 88%.
 
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
@@ -381,7 +411,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 121 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 124 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
