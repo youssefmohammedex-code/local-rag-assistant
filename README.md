@@ -149,10 +149,16 @@ eval/            question set + benchmarking harness
 tests/           unit tests (pytest, no Ollama needed)
 ```
 
+## Reliability
+
+- **Re-indexing is safe:** all embeddings are computed before the old index is replaced. If Ollama is down mid-way, or the docs folder is empty or misconfigured, the existing index is kept. This was a real bug found by testing failure cases: a failed re-index used to wipe the index.
+- **Nothing fails silently:** files with no extractable text (empty files, corrupt PDFs, scanned PDFs that need OCR) are reported, and replacing an uploaded file is announced.
+- **Actionable errors:** the CLI and the app show messages like *"Can't reach Ollama…"* or *"The model `x` isn't installed. Run `ollama pull x`"* instead of stack traces.
+
 ## Tests
 
 ```bash
-pytest
+pytest          # 37 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap

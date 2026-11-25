@@ -6,10 +6,12 @@ import dataclasses
 import html
 import re
 import time
+from pathlib import Path
 
 import streamlit as st
 
 from rag.config import Settings
+from rag.errors import friendly_error
 from rag.loaders import SUPPORTED_SUFFIXES, pretty_source
 from rag.pipeline import MODES, RAGPipeline
 from rag.store import Hit
@@ -119,6 +121,26 @@ def render_assistant(message: dict) -> None:
             st.markdown(source_cards(message["hits"], message["content"]), unsafe_allow_html=True)
 
 
+def reindex(pipeline: RAGPipeline, label: str, notes: list[str] | None = None) -> None:
+    """Rebuild the index and leave a message for the next run. On failure the old index is kept."""
+    start = time.perf_counter()
+    try:
+        with st.spinner(label):
+            report = pipeline.ingest(reset=True)
+    except Exception as exc:
+        st.session_state.flash = [
+            ("error", f"Indexing failed: {friendly_error(exc)} Your previous index is unchanged.")]
+    else:
+        flash = [("success", f"Indexed {report.chunks} passages from {report.files} file(s) "
+                             f"in {time.perf_counter() - start:.0f}s.")]
+        flash += [("info", note) for note in notes or []]
+        flash += [("warning", f"Skipped **{s}**: no extractable text (empty, unreadable, or a scanned PDF "
+                              "that needs OCR).") for s in report.skipped]
+        st.session_state.flash = flash
+        st.session_state.skipped = set(report.skipped)  # known-unreadable files aren't "pending"
+    st.rerun()
+
+
 def docs_on_disk(settings: Settings) -> set[str]:
     if not settings.docs_dir.exists():
         return set()
@@ -153,23 +175,27 @@ with st.sidebar:
     new_uploads = [u for u in uploads or [] if u.file_id not in st.session_state.setdefault("saved_uploads", set())]
     if new_uploads:
         pipeline.settings.docs_dir.mkdir(parents=True, exist_ok=True)
+        notes = []
         for u in new_uploads:
-            (pipeline.settings.docs_dir / u.name).write_bytes(u.getbuffer())
+            target = pipeline.settings.docs_dir / Path(u.name).name  # basename only: no path tricks
+            if target.exists():
+                notes.append(f"Replaced the existing **{target.name}** with the uploaded version.")
+            target.write_bytes(u.getbuffer())
             st.session_state.saved_uploads.add(u.file_id)
-        with st.spinner(f"Indexing {len(new_uploads)} new file(s)…"):
-            n = pipeline.ingest(reset=True)
-        st.toast(f"Indexed {n} passages", icon="✅")
-        st.rerun()
+        reindex(pipeline, f"Indexing {len(new_uploads)} new file(s)…", notes)
 
-    pending = on_disk - indexed
+    for kind, message in st.session_state.pop("flash", []):
+        getattr(st, kind)(message)
+
+    pending = on_disk - indexed - st.session_state.get("skipped", set())
+    missing = indexed - on_disk
     if pending:
         st.warning(f"{len(pending)} file(s) not indexed yet.")
-    if st.button("Re-index all documents", use_container_width=True, type="primary" if pending else "secondary"):
-        with st.spinner("Embedding documents… (about 1 s per 5 passages)"):
-            start = time.perf_counter()
-            n = pipeline.ingest(reset=True)
-        st.toast(f"Indexed {n} passages in {time.perf_counter() - start:.0f}s", icon="✅")
-        st.rerun()
+    if missing:
+        st.warning(f"{len(missing)} indexed file(s) were removed from disk. Re-index to drop them.")
+    if st.button("Re-index all documents", use_container_width=True,
+                 type="primary" if pending or missing else "secondary"):
+        reindex(pipeline, "Embedding documents… (about 1 s per 5 passages)")
 
     for source in sorted(indexed):
         st.markdown(f'<div class="doc" title="{html.escape(source)}">📄 {html.escape(pretty_source(source))}</div>',
@@ -227,7 +253,8 @@ if question:
     with st.chat_message("assistant", avatar="📚"):
         if chunk_count == 0:
             reply = {"role": "assistant",
-                     "content": "Your library is empty. Add files in the sidebar, then click **Re-index all documents**."}
+                     "content": "Your library is empty. Add files in the sidebar, "
+                                "then click **Re-index all documents**."}
             render_assistant(reply)
         else:
             try:
@@ -247,9 +274,7 @@ if question:
                         f"{stats.tokens_per_second:.1f} tok/s · {time.perf_counter() - start:.0f}s")
                 reply = {"role": "assistant", "content": text.strip(), "hits": hits, "meta": meta}
                 render_assistant(reply)
-            except Exception as exc:  # most often: Ollama is not running
-                reply = {"role": "assistant",
-                         "content": f"⚠️ Couldn't reach the local model: `{exc}`. "
-                                    "Make sure Ollama is running (open it from the Start menu) and try again."}
+            except Exception as exc:  # most often: Ollama is not running or the model isn't pulled
+                reply = {"role": "assistant", "content": f"⚠️ {friendly_error(exc)}"}
                 st.markdown(reply["content"])
     messages.append(reply)

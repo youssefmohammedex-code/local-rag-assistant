@@ -8,6 +8,7 @@ import sys
 import time
 
 from rag.config import Settings
+from rag.errors import friendly_error
 from rag.loaders import pretty_source
 from rag.pipeline import MODES, RAGPipeline
 
@@ -24,8 +25,11 @@ def _settings(args: argparse.Namespace) -> Settings:
 def cmd_ingest(args: argparse.Namespace) -> None:
     pipeline = RAGPipeline(_settings(args))
     start = time.perf_counter()
-    n = pipeline.ingest(reset=True)
-    print(f"Indexed {n} chunks into '{pipeline.store.name}' in {time.perf_counter() - start:.1f}s")
+    report = pipeline.ingest(reset=True)
+    print(f"Indexed {report.chunks} chunks from {report.files} file(s) into '{pipeline.store.name}' "
+          f"in {time.perf_counter() - start:.1f}s")
+    for source in report.skipped:
+        print(f"  Skipped {source}: no extractable text (empty, unreadable, or a scanned PDF that needs OCR)")
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
@@ -57,7 +61,12 @@ def main(argv: list[str] | None = None) -> None:
     ask.set_defaults(func=cmd_ask)
 
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as exc:  # show an actionable message instead of a traceback
+        sys.exit(f"Error: {friendly_error(exc)}")
 
 
 if __name__ == "__main__":
