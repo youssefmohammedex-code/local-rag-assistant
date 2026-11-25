@@ -21,8 +21,8 @@ class Settings:
     ollama_host: str = field(default_factory=lambda: os.getenv("OLLAMA_HOST", "http://localhost:11434"))
     embed_model: str = field(default_factory=lambda: os.getenv("RAG_EMBED_MODEL", "nomic-embed-text"))
     llm_model: str = field(default_factory=lambda: os.getenv("RAG_LLM_MODEL", "llama3.2:3b"))
-    chunk_size: int = field(default_factory=lambda: _env_int("RAG_CHUNK_SIZE", 800))
-    chunk_overlap: int = field(default_factory=lambda: _env_int("RAG_CHUNK_OVERLAP", 120))
+    chunk_size: int = field(default_factory=lambda: _env_int("RAG_CHUNK_SIZE", 1000))
+    chunk_overlap: int = field(default_factory=lambda: _env_int("RAG_CHUNK_OVERLAP", 150))
     top_k: int = field(default_factory=lambda: _env_int("RAG_TOP_K", 4))
     temperature: float = 0.1
 
