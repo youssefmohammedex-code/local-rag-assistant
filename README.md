@@ -134,3 +134,7 @@ pytest
 - [ ] Cross-encoder re-ranking of the top-k passages
 - [ ] Arabic document support (multilingual embedding model) and evaluation
 - [ ] Answer caching and incremental re-indexing
+
+## License
+
+[MIT](LICENSE)
