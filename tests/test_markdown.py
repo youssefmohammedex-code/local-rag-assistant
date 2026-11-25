@@ -44,7 +44,7 @@ def test_heading_only_sections_are_skipped():
 def test_markdown_chunks_carry_contextual_header(tmp_path):
     (tmp_path / "guide.md").write_text(DOC, encoding="utf-8")
     chunks = chunk_pages(load_documents(tmp_path), 500, 50)
-    engine = next(c for c in chunks if "tick loop" in c.text)
+    engine = next(c for c in chunks if c.section.endswith("Module A — Engine (Alice)"))
     assert engine.text.startswith("Project Guide > 1. Modules > Module A — Engine (Alice)\n\n")
     assert engine.section.endswith("Module A — Engine (Alice)")
     assert len({c.id for c in chunks}) == len(chunks)

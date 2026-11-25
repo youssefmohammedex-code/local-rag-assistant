@@ -50,6 +50,29 @@ def test_normalize_collapses_whitespace():
     assert normalize("a  \t b\r\n\n\n\nc") == "a b\n\nc"
 
 
+SMALL = [Page("d.md", 1, "Python 3.8+", section="Lib > Requirements", part=1),
+         Page("d.md", 1, "pip install lib " * 20, section="Lib > Installation", part=2),
+         Page("d.md", 1, "Long usage text. " * 60, section="Lib > Usage", part=3)]
+
+
+def test_tiny_section_borrows_context_but_keeps_its_own_heading():
+    chunks = chunk_pages(SMALL, 1000, 150)
+    req = next(c for c in chunks if c.section == "Lib > Requirements")
+    assert req.text.startswith("Lib > Requirements\n\nPython 3.8+\n\nInstallation\npip install lib")
+    assert [c.section for c in chunks] == ["Lib > Requirements", "Lib > Installation", "Lib > Usage", "Lib > Usage"]
+
+
+def test_borrowing_stops_at_the_file_boundary():
+    pages = [Page("a.md", 1, "tiny", section="A > X", part=1), Page("b.md", 1, "other file", section="B", part=1)]
+    assert chunk_pages(pages, 1000, 150)[0].text == "A > X\n\ntiny"
+
+
+def test_small_section_modes_off_and_pack():
+    assert chunk_pages(SMALL, 1000, 150, small="off")[0].text == "Lib > Requirements\n\nPython 3.8+"
+    packed = chunk_pages(SMALL, 1000, 150, small="pack")
+    assert packed[0].section == "Lib"  # merged sections lose their own heading: why "pack" isn't the default
+
+
 def test_chunk_ids_are_unique_and_keep_metadata():
     pages = [Page("a.md", 1, TEXT), Page("b.pdf", 3, TEXT)]
     chunks = chunk_pages(pages, 400, 60)

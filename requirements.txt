@@ -1,5 +1,6 @@
 chromadb>=0.5,<2
 ollama>=0.4
 pypdf>=4.0
+snowballstemmer>=2.2
 streamlit>=1.38
 pytest>=8.0

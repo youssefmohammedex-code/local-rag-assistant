@@ -10,6 +10,9 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
+from functools import lru_cache
+
+import snowballstemmer
 
 # Words joined by - . : stay together as one identifier token ("br-05", "v2.1") and are also split.
 _TOKEN = re.compile(r"\w+(?:[-.:]\w+)*", re.UNICODE)
@@ -35,6 +38,18 @@ def identifiers(text: str) -> set[str]:
     return {m.group() for m in _TOKEN.finditer(text.lower()) if is_identifier(m.group())}
 
 
+_STEMMER = snowballstemmer.stemmer("english")
+
+
+@lru_cache(maxsize=100_000)
+def stem(word: str) -> str:
+    """English Snowball stem for plain ASCII words ("requirements" -> "requir", like "require");
+    codes with digits and non-English words (e.g. Arabic) are left exactly as written."""
+    if len(word) > 3 and word.isascii() and word.isalpha():
+        return _STEMMER.stemWord(word)
+    return word
+
+
 def tokenize(text: str) -> list[str]:
     tokens: list[str] = []
     for match in _TOKEN.finditer(text.lower()):
@@ -42,7 +57,7 @@ def tokenize(text: str) -> list[str]:
         parts = [p for p in _SPLIT.split(token) if p]
         if len(parts) > 1:
             tokens.append(token)
-        tokens.extend(p for p in parts if p not in STOPWORDS)
+        tokens.extend(stem(p) for p in parts if p not in STOPWORDS)
     return tokens
 
 

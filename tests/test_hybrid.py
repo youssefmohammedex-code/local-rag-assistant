@@ -1,12 +1,17 @@
 import pytest
 
-from rag.bm25 import BM25, identifiers, is_identifier, reciprocal_rank_fusion, tokenize
+from rag.bm25 import BM25, identifiers, is_identifier, reciprocal_rank_fusion, stem, tokenize
 
 
 def test_tokenizer_keeps_identifiers_whole_and_split():
     tokens = tokenize("Decision D13 replaces BR-05 in v2.1; see PYTHONHASHSEED.")
-    assert {"d13", "br-05", "br", "05", "v2.1", "pythonhashseed", "decision"} <= set(tokens)
+    assert {"d13", "br-05", "br", "05", "v2.1", stem("pythonhashseed"), stem("decision")} <= set(tokens)
     assert "in" not in tokens  # stopword
+
+
+def test_stemming_matches_word_forms_but_not_codes():
+    assert tokenize("require")[0] == tokenize("Requirements")[0] == tokenize("required")[0]
+    assert "v2.14.0" in tokenize("v2.14.0") and "d13" in tokenize("D13")
 
 
 @pytest.mark.parametrize("token,expected", [

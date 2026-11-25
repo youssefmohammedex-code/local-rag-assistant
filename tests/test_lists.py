@@ -56,9 +56,9 @@ def test_summary_uses_full_path_so_the_document_name_does_not_decide():
 
 
 def overlap_scorer(question, texts):
-    """Stand-in for embedding similarity in tests: shared words."""
+    """Stand-in for embedding similarity in tests: how often the question's words occur."""
     q = set(tokenize(question))
-    return [len(q & set(tokenize(t))) for t in texts]
+    return [sum(t in q for t in tokenize(text)) for text in texts]
 
 
 GUIDE = "# Guide\n\n## Intro\nOverview text.\n\n## Modules\n" + "".join(
