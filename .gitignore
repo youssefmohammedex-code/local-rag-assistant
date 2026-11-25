@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Local vector index (rebuilt by `python -m rag ingest`)
+data/chroma/
+
+# Your private documents: only the sample folder is committed
+data/docs/*
+!data/docs/sample/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.env
