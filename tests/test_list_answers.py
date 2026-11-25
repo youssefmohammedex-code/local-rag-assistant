@@ -7,11 +7,20 @@ from test_lists import GUIDE, overlap_scorer
 
 
 class FakeLLM:
-    def __init__(self):
+    """Records answer prompts in .prompts and list-choice prompts in .choices. `chooser` answers the
+    choice prompts (default: an unusable reply, so the pipeline keeps both lists)."""
+
+    def __init__(self, chooser=lambda prompt: "?"):
         self.prompts: list[str] = []
+        self.choices: list[str] = []
+        self.chooser = chooser
 
     def chat(self, model, messages, options, stream=False):
         prompt = messages[-1]["content"]
+        if "single letter A or B" in prompt:
+            self.choices.append(prompt)
+            yield {"message": {"content": self.chooser(prompt)}, "done": True, "eval_count": 1, "eval_duration": 1e8}
+            return
         self.prompts.append(prompt)
         sections = re.findall(r"### (.+)", prompt) or ["answer"]
         yield {"message": {"content": f"call {len(self.prompts)}: {', '.join(sections)}"}, "done": False}
@@ -68,6 +77,52 @@ def test_single_strategy_and_concise_mode_use_one_plain_call(pipeline):
     pipeline._llm = FakeLLM()
     pipeline.generate(question, hits, mode="concise")
     assert len(pipeline._llm.prompts) == 1
+
+
+def _letter_of(prompt, words):
+    """Fake model that picks, by content, the option line containing `words` (order-independent)."""
+    for line in prompt.splitlines():
+        if line[:3] in ("A: ", "B: ") and words in line:
+            return line[0]
+    return "?"
+
+
+def test_checklist_answers_from_the_list_both_orders_agree_on(pipeline):
+    question, hits = _setup(pipeline, "checklist")
+    lists = pipeline._list_plans[question]
+    assert len(lists) == 2
+    wanted = next(lst for lst in lists if lst[1].endswith("Modules"))
+    pipeline._llm = FakeLLM(chooser=lambda p: _letter_of(p, "Modules:"))
+    pipeline.generate(question, hits)
+    llm = pipeline._llm
+    assert len(llm.choices) == 2  # asked in both orders
+    assert llm.choices[0].index("A: ") < llm.choices[0].index(wanted[1]) and \
+        llm.choices[1].index("B: ") < llm.choices[1].index(wanted[1])  # the order really was swapped
+    prompt = llm.prompts[0]
+    wanted_ids = {chunk_id for _, chunk_id in wanted[2]}
+    shown = {int(n) for n in re.findall(r'<passage id="(\d+)"', prompt)}
+    expected = {i for i, h in enumerate(hits, start=1) if h.via != "section" or h.id in wanted_ids}
+    assert shown == expected and len(shown) < len(hits)  # the other list's expanded passages are gone
+    for name, _ in wanted[2]:
+        assert f"### {name}" in prompt
+
+
+def test_checklist_shows_passages_in_document_order_with_their_real_ids(pipeline):
+    question, hits = _setup(pipeline, "checklist")
+    pipeline.generate(question, hits)
+    shown = [int(n) for n in re.findall(r'<passage id="(\d+)"', pipeline._llm.prompts[0])]
+    assert sorted(shown) == list(range(1, len(hits) + 1))  # every passage, ids unchanged
+    positions = [int(re.search(r"::s(\d+)::", hits[i - 1].id).group(1)) for i in shown]
+    assert positions == sorted(positions)
+    assert shown != sorted(shown)  # retrieval order really was different
+
+
+def test_checklist_keeps_both_lists_when_the_orders_disagree(pipeline):
+    question, hits = _setup(pipeline, "checklist")
+    pipeline._llm = FakeLLM(chooser=lambda p: "A")  # position bias: always the first option
+    pipeline.generate(question, hits)
+    shown = re.findall(r'<passage id="(\d+)"', pipeline._llm.prompts[0])
+    assert len(shown) == len(hits)
 
 
 def test_unknown_strategy_is_rejected(pipeline):

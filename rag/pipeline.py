@@ -159,6 +159,21 @@ def checklist_instructions(items: list[ListItem]) -> str:
             "passages from that section. Do not move examples or facts between headings.")
 
 
+def _document_order(hit: Hit, hits: list[Hit]) -> tuple:
+    """Sort key: documents in order of their first appearance in `hits`, then position in the
+    document (chunk ids look like "<source>::p<page>::s<part>::c<i>")."""
+    match = re.search(r"::s(\d+)::c(\d+)$", hit.id)
+    position = (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+    first = next(i for i, h in enumerate(hits) if h.source == hit.source)
+    return (first, *position)
+
+
+def choose_list_prompt(question: str, lists: list) -> str:
+    options = "\n".join(f"{letter}: {describe_list(*lst)}" for letter, lst in zip("AB", lists, strict=True))
+    return (f"Question: {question}\n\nTwo lists of sections from the documents:\n{options}\n\n"
+            "Which list's sections does the question ask about? Answer with the single letter A or B.")
+
+
 def per_item_instructions(items: list[ListItem]) -> str:
     names = "; ".join(item.name for item in items)
     return (f"Answer the question separately for each of these sections: {names}. "
@@ -294,11 +309,11 @@ class RAGPipeline:
             used += len(item.text)
         return top + expanded
 
-    def list_items(self, question: str, hits: list[Hit]) -> list[ListItem]:
+    def list_items(self, question: str, hits: list[Hit], lists: list | None = None) -> list[ListItem]:
         """The list a question was expanded into, as items with the passages about each one.
         Empty when retrieval did not treat it as a list question."""
         items: dict[str, ListItem] = {}
-        for source, parent, kids in self._list_plans.get(question, []):
+        for source, parent, kids in self._list_plans.get(question, []) if lists is None else lists:
             for name, _ in kids:
                 path = f"{parent} > {name}" if parent else name
                 if path in items:
@@ -317,6 +332,31 @@ class RAGPipeline:
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
             "options": {"temperature": self.settings.temperature, "num_ctx": self.settings.num_ctx},
         }
+
+    def choose_list(self, question: str) -> int | None:
+        """Retrieval expands the two best-matching lists because embedding similarity often can't
+        tell them apart (it ranked an httpcore changelog above the guide's own sections for "all
+        the sections of the guide"). Before answering, ask the model which one the question means:
+        a one-letter multiple choice that a 7B model gets right far more reliably than it ignores
+        40 irrelevant passages. Asked in both orders, because the model leans towards one letter
+        when unsure: a pick counts only if both orders agree. None (keep both lists, as before)
+        when there is nothing to choose, the orders disagree, or a reply is not A/B."""
+        lists = self._list_plans.get(question, [])
+        if len(lists) != 2:
+            return None
+        picks = []
+        for order in ([0, 1], [1, 0]):
+            request = {
+                "model": self.settings.llm_model,
+                "messages": [{"role": "user", "content": choose_list_prompt(question, [lists[i] for i in order])}],
+                "options": {"temperature": 0, "num_predict": 4, "num_ctx": self.settings.num_ctx},
+            }
+            reply = "".join(self._stream_call(request)).strip().upper()
+            match = re.match(r"\W*([AB])\b", reply)
+            if not match:
+                return None
+            picks.append(order["AB".index(match.group(1))])
+        return picks[0] if picks[0] == picks[1] else None
 
     def generate(self, question: str, hits: list[Hit], mode: str | None = None) -> str:
         return "".join(self.stream(question, hits, mode)).strip()
@@ -342,8 +382,24 @@ class RAGPipeline:
             yield from self._stream_call(self._request(question, hits, mode))
             return
         if strategy == "checklist":
-            yield from self._stream_call(self._request(question, hits, mode,
-                                                       instructions=checklist_instructions(items)))
+            ids = list(range(1, len(hits) + 1))
+            choice = self.choose_list(question)
+            if choice is not None:
+                # Answer from the chosen list only: keep the normal top-k (as always) plus the passages
+                # expanded for that list, and drop the other list's.
+                chosen = self._list_plans[question][choice]
+                expanded_for_it = {chunk_id for _, chunk_id in chosen[2]}
+                ids = [i for i, h in enumerate(hits, start=1) if h.via != "section" or h.id in expanded_for_it]
+                kept = set(ids)
+                items = [dataclasses.replace(item, passages=[i for i in item.passages if i in kept])
+                         for item in self.list_items(question, hits, lists=[chosen])]
+                items = [item for item in items if item.passages] or self.list_items(question, hits)
+            # Show passages in document order (the outline's order), keeping their real ids, so each
+            # section's passages sit together under the heading order the model is asked to follow.
+            ids = sorted(ids, key=lambda i: _document_order(hits[i - 1], hits))
+            request = self._request(question, [hits[i - 1] for i in ids], mode, ids=ids,
+                                    instructions=checklist_instructions(items))
+            yield from self._stream_call(request)
             return
         for start in range(0, len(items), LIST_ITEMS_PER_CALL):
             batch = items[start:start + LIST_ITEMS_PER_CALL]
