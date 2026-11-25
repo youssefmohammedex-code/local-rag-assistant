@@ -21,9 +21,18 @@ SYSTEM_PROMPT = (
 
 
 def build_prompt(question: str, hits: list[Hit]) -> str:
-    blocks = [f"[{i}] ({h.source}, p. {h.page})\n{h.text}" for i, h in enumerate(hits, start=1)]
+    # XML-style tags keep small models from copying passage headers into the answer.
+    blocks = [
+        f'<passage id="{i}" source="{h.source}" page="{h.page}">\n{h.text}\n</passage>'
+        for i, h in enumerate(hits, start=1)
+    ]
     context = "\n\n".join(blocks) if blocks else "(no context found)"
-    return f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+    return (
+        f"{context}\n\n"
+        f"Question: {question}\n\n"
+        "Write a complete answer in 1-3 sentences using only the passages above. "
+        'After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
+    )
 
 
 @dataclass

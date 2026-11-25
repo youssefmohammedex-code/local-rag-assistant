@@ -11,9 +11,10 @@ HITS = [
 
 def test_prompt_numbers_passages_and_cites_sources():
     prompt = build_prompt("What scale?", HITS)
-    assert "[1] (sample/student-handbook.md, p. 1)" in prompt
-    assert "[2] (sample/lab-safety-rules.md, p. 1)" in prompt
-    assert prompt.strip().endswith("Question: What scale?\nAnswer:")
+    assert '<passage id="1" source="sample/student-handbook.md" page="1">' in prompt
+    assert '<passage id="2" source="sample/lab-safety-rules.md" page="1">' in prompt
+    assert "Question: What scale?" in prompt
+    assert prompt.index("</passage>") < prompt.index("Question:")
 
 
 def test_prompt_without_hits():
