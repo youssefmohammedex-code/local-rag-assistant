@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Bump when chunking/loading changes so old indexes are not silently reused.
-INDEX_VERSION = 2
+INDEX_VERSION = 3  # v3: PDF headings/sections, context for tiny sections, stemmed keywords
 
 
 def _env_int(name: str, default: int | None) -> int | None:

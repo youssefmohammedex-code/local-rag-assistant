@@ -46,6 +46,8 @@ def cmd_ask(args: argparse.Namespace) -> None:
     print("\n\nSources:")
     for i, hit in enumerate(hits, start=1):
         where = hit.section.split(" > ")[-1] if hit.section else f"p.{hit.page}"
+        if hit.section and hit.source.lower().endswith(".pdf"):
+            where += f", p.{hit.page}"
         print(f"  [{i}] {pretty_source(hit.source)} · {where}  (similarity {hit.score:.2f}, via {hit.via})")
 
 

@@ -102,6 +102,8 @@ def source_cards(hits: list[Hit], answer: str) -> str:
         # Markdown docs: use the real "# Title" (export file names are often truncated).
         title = path[0] if path else pretty_source(h.source)
         where = " › ".join(path[1:]) or (f"Page {h.page}" if not path else "Introduction")
+        if path and h.source.lower().endswith(".pdf"):
+            where += f" · page {h.page}"
         snippet = body[:360] + ("…" if len(body) > 360 else "")
         cards.append(
             f'<div class="src {"cited" if i + 1 in used else ""}">'

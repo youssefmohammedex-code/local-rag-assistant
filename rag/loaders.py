@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from pypdf import PdfReader
+from rag.pdf import read_pdf
 
 SUPPORTED_SUFFIXES = {".pdf", ".md", ".txt"}
 
@@ -128,11 +128,8 @@ def load_documents(docs_dir: Path, skipped: list[str] | None = None,
         before = len(pages)
         if suffix == ".pdf":
             try:
-                reader = PdfReader(path)
-                for number, pdf_page in enumerate(reader.pages, start=1):
-                    text = pdf_page.extract_text() or ""
-                    if text.strip():
-                        pages.append(Page(source, number, text))
+                for part, (number, section, body) in enumerate(read_pdf(path), start=1):
+                    pages.append(Page(source, number, body, section=section, part=part))
             except Exception:  # corrupt or encrypted PDF: skip it, report it
                 pass
         elif suffix == ".md":

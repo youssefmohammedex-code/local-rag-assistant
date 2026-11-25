@@ -85,7 +85,10 @@ def build_prompt(question: str, hits: list[Hit], mode: str = "detailed") -> str:
     blocks = []
     for i, h in enumerate(hits, start=1):
         attrs = f'id="{i}" source="{pretty_source(h.source)}"'
-        attrs += f' section="{h.section}"' if h.section else f' page="{h.page}"'
+        if h.section:
+            attrs += f' section="{h.section}"'
+        if not h.section or h.source.lower().endswith(".pdf"):  # PDFs: page numbers matter for citations
+            attrs += f' page="{h.page}"'
         blocks.append(f"<passage {attrs}>\n{h.text}\n</passage>")
     context = "\n\n".join(blocks) if blocks else "(no context found)"
     return f"{context}\n\nQuestion: {question}\n\n{MODES[mode].instructions} {CITATION_RULE}"
