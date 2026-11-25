@@ -77,8 +77,8 @@ def test_list_question_gets_every_sub_section_in_document_order(pipeline):
     hits = pipeline.retrieve("Describe every module", k=4)
     sections = {h.section for h in hits}
     assert {f"Guide > Modules > Module {c} — Part {c}" for c in "ABCDEFGH"} <= sections
-    expanded = [h.section for h in hits if h.via == "section"]
-    assert expanded == sorted(expanded)  # document order (A..H)
+    modules = [h.section for h in hits if h.via == "section" and h.section.startswith("Guide > Modules > ")]
+    assert modules == sorted(modules)  # within a list: document order (A..H)
 
 
 def test_expansion_is_additive_never_drops_normal_results(pipeline):
@@ -99,6 +99,31 @@ def test_expansion_respects_the_character_budget(pipeline):
 def test_precise_questions_are_unchanged(pipeline):
     _setup(pipeline)
     assert all(h.via != "section" for h in pipeline.retrieve("Who owns component C?", k=4))
+
+
+def test_ancestor_and_nesting():
+    from rag.pipeline import _is_ancestor, _nested
+    root, cards, card_a, other = ("g", "", []), ("g", "G > Cards", []), ("g", "G > Cards > A", []), ("h", "H", [])
+    assert _is_ancestor(root, cards) and _is_ancestor(cards, card_a) and not _is_ancestor(card_a, cards)
+    assert not _nested(cards, other) and _nested(card_a, root)
+
+
+TWO_LISTS = ("# Doc\n\n## Modules\n" + "".join(f"\n### Module {c}\nModule {c} text. " + "Detail. " * 30 + "\n"
+                                               for c in "ABC")
+             + "\n## Releases\n" + "".join(f"\n### Release {n}\nRelease {n} notes. " + "Note. " * 30 + "\n"
+                                           for n in "123"))
+
+
+def test_top2_expands_both_best_lists_without_duplicates(pipeline):
+    pipeline.settings = dataclasses.replace(pipeline.settings, list_char_budget=50_000)
+    pipeline.list_scorer = overlap_scorer
+    (pipeline.settings.docs_dir / "doc.md").write_text(TWO_LISTS, encoding="utf-8")
+    pipeline.ingest()
+    hits = pipeline.retrieve("List every module and every release", k=2)
+    sections = {h.section for h in hits}
+    assert {f"Doc > Modules > Module {c}" for c in "ABC"} <= sections
+    assert {f"Doc > Releases > Release {n}" for n in "123"} <= sections
+    assert len({h.id for h in hits}) == len(hits)
 
 
 def test_expansion_can_be_switched_off(pipeline):

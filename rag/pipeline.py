@@ -68,6 +68,22 @@ def candidate_lists(hits: list[Hit], outlines: dict[str, list[tuple[str, str]]])
     return {key: kids for key, kids in nodes.items() if kids}
 
 
+# Which ranked sections to expand. Benchmarked on 29 list questions over 4 document sets:
+# top1 86%, ancestor 84%, nested-both 94%, top2 97% coverage, and top2 made no question worse than
+# top1. The selector is often unsure (0.793 vs 0.791 between a changelog and one release's
+# sub-list), so expanding the two best hedges that, at ~27% more context. Kept switchable.
+LIST_STRATEGY = "top2"  # "top1" | "top2" | "nested-both" | "ancestor"
+
+
+def _is_ancestor(a: tuple, b: tuple) -> bool:
+    """True if section a contains section b (same file)."""
+    return a[0] == b[0] and a[1] != b[1] and (a[1] == "" or b[1].startswith(a[1] + " > "))
+
+
+def _nested(a: tuple, b: tuple) -> bool:
+    return _is_ancestor(a, b) or _is_ancestor(b, a)
+
+
 def describe_list(source: str, parent: str, kids: list) -> str:
     """A section summarized as its full heading path plus its sub-headings, e.g.
     "orjson > Types: dataclass; datetime; enum; ...". The full path matters: with only the last
@@ -160,19 +176,33 @@ class RAGPipeline:
             return self.store.search(question, k, mode)
         return self._retrieve_list(question, k, mode)
 
-    def pick_list(self, question: str, candidates: list[Hit]) -> tuple[str, str, list] | None:
-        """Which section is the question asking to enumerate? Each possible section is summarized as
-        "heading: sub-heading; sub-heading; ..." and the one whose summary is most similar to the
-        question (same embedding model as search) wins. No hand-tuned weights: an earlier
-        weighted-heuristic version overfit one document set and failed on new documents."""
+    def rank_lists(self, question: str, candidates: list[Hit]) -> list[tuple[str, str, list]]:
+        """Possible sections to enumerate, best first. Each is summarized as "heading path:
+        sub-heading; sub-heading; ..." and ranked by similarity to the question (same embedding
+        model as search). No hand-tuned weights: an earlier weighted-heuristic version overfit one
+        document set and failed on new documents."""
         outlines = {source: self.store.outline(source) for source in {h.source for h in candidates}}
         nodes = candidate_lists(candidates, outlines)
         if not nodes:
-            return None
+            return []
         keys = list(nodes)
         scores = self.list_scorer(question, [describe_list(s, p, nodes[(s, p)]) for s, p in keys])
-        source, parent = keys[max(range(len(keys)), key=scores.__getitem__)]
-        return source, parent, nodes[(source, parent)]
+        order = sorted(range(len(keys)), key=lambda i: -scores[i])
+        return [(*keys[i], nodes[keys[i]]) for i in order]
+
+    def pick_lists(self, question: str, candidates: list[Hit]) -> list[tuple[str, str, list]]:
+        ranked = self.rank_lists(question, candidates)
+        if not ranked:
+            return []
+        if LIST_STRATEGY == "top2":
+            return ranked[:2]
+        if LIST_STRATEGY == "nested-both" and len(ranked) > 1 and _nested(ranked[0], ranked[1]):
+            return ranked[:2]
+        if LIST_STRATEGY == "ancestor":
+            for other in ranked[1:3]:
+                if _is_ancestor(other, ranked[0]):
+                    return [other]
+        return ranked[:1]
 
     def _retrieve_list(self, question: str, k: int, mode: str) -> list[Hit]:
         """List questions ("describe every module") need one passage per item, not the k most
@@ -180,16 +210,17 @@ class RAGPipeline:
         the best few normal hits, then add the first passage of *every* sub-section, trimming
         each one so the whole list fits the context budget."""
         candidates = self.store.search(question, max(k, LIST_CANDIDATES), mode)
-        picked = self.pick_list(question, candidates)
-        if picked is None:
+        picked = self.pick_lists(question, candidates)
+        if not picked:
             return candidates[:k]
-        _, _, kids = picked
+        # A parent's sub-section and its child's first item can start with the same passage: dedupe by id.
+        chunk_ids = list(dict.fromkeys(cid for _, _, node_kids in picked for _, cid in node_kids))
         # Additive by design: keep exactly the normal top-k and only add list items in the space
         # left. Picking the right section is ambiguous and every selection rule tried failed on
         # some documents; this way a wrong pick costs context space, never the normal results.
         top = candidates[:k]
         top_ids = {t.id for t in top}
-        items = self.store.hits_for([cid for _, cid in kids if cid not in top_ids], question, via="section")
+        items = self.store.hits_for([cid for cid in chunk_ids if cid not in top_ids], question, via="section")
         budget = self.settings.list_char_budget - sum(len(h.text) for h in top)
         per_item = max(MIN_ITEM_CHARS, budget // max(len(items), 1))
         expanded, used = [], 0
