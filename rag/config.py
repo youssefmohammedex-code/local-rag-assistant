@@ -29,6 +29,8 @@ class Settings:
     # "detailed" or "concise". Each mode has its own default number of passages (see pipeline.MODES).
     answer_mode: str = field(default_factory=lambda: os.getenv("RAG_ANSWER_MODE", "detailed"))
     top_k: int | None = field(default_factory=lambda: _env_int("RAG_TOP_K", None))
+    # "hybrid" (embeddings + BM25 keyword search) or "vector" (embeddings only).
+    retrieval: str = field(default_factory=lambda: os.getenv("RAG_RETRIEVAL", "hybrid"))
     # Ollama's default context window is small; 10 passages + a long answer needs more room.
     num_ctx: int = field(default_factory=lambda: _env_int("RAG_NUM_CTX", 8192))
     temperature: float = 0.1

@@ -112,8 +112,8 @@ class RAGPipeline:
     def default_k(self, mode: str | None = None) -> int:
         return self.settings.top_k or MODES[mode or self.settings.answer_mode].k
 
-    def retrieve(self, question: str, k: int | None = None) -> list[Hit]:
-        return self.store.search(question, k or self.default_k())
+    def retrieve(self, question: str, k: int | None = None, mode: str | None = None) -> list[Hit]:
+        return self.store.search(question, k or self.default_k(), mode or self.settings.retrieval)
 
     def _request(self, question: str, hits: list[Hit], mode: str | None) -> dict:
         return {

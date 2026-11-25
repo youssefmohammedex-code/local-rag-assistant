@@ -6,10 +6,15 @@ import contextlib
 from dataclasses import dataclass
 
 import chromadb
+import numpy as np
 import ollama
 
+from rag.bm25 import BM25, is_identifier, reciprocal_rank_fusion, tokenize
 from rag.chunking import Chunk
 from rag.config import Settings
+
+SEARCH_MODES = ("hybrid", "vector")
+CANDIDATE_POOL = 50  # candidates taken from each ranking before fusion
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,7 @@ class Hit:
     page: int
     score: float  # cosine similarity, higher is better
     section: str = ""
+    via: str = "meaning"  # which search found it: "meaning" (vector), "keyword" (BM25) or "both"
 
 
 class VectorStore:
@@ -29,6 +35,8 @@ class VectorStore:
         self._client = chromadb.PersistentClient(path=str(settings.db_dir))
         self._ollama = ollama.Client(host=settings.ollama_host)
         self._collection = self._get_collection()
+        self._bm25: tuple[list[str], BM25] | None = None
+        self._bm25_key: tuple | None = None
 
     def _get_collection(self):
         return self._client.get_or_create_collection(self.name, metadata={"hnsw:space": "cosine"})
@@ -58,6 +66,7 @@ class VectorStore:
         with contextlib.suppress(Exception):  # collection did not exist
             self._client.delete_collection(self.name)
         self._collection = self._get_collection()
+        self._bm25_key = None
 
     def embed_chunks(self, chunks: list[Chunk], batch_size: int = 32) -> list[list[float]]:
         vectors: list[list[float]] = []
@@ -80,17 +89,58 @@ class VectorStore:
                 embeddings=embeddings[i : i + batch_size],
                 metadatas=[{"source": c.source, "page": c.page, "section": c.section} for c in batch],
             )
+        self._bm25_key = None
 
-    def search(self, query: str, k: int) -> list[Hit]:
-        if self.count() == 0:
+    def _db_stamp(self) -> tuple[int, ...]:
+        """Changes whenever any process writes the index (Chroma keeps it in SQLite)."""
+        files = [self.settings.db_dir / "chroma.sqlite3", self.settings.db_dir / "chroma.sqlite3-wal"]
+        return tuple(f.stat().st_mtime_ns if f.exists() else 0 for f in files)
+
+    def _keyword_index(self) -> tuple[list[str], BM25]:
+        """BM25 over every stored chunk, rebuilt only when the index changes."""
+        key = (self.name, self.count(), self._db_stamp())
+        if self._bm25_key != key:
+            data = self._collection.get(include=["documents", "metadatas"])
+            # Title boost: the heading path is already the chunk's first line; adding it once more
+            # lets the section *named* "D13" outrank sections that only mention D13 in passing.
+            corpus = [f"{m.get('section', '')}\n{d}" for d, m in zip(data["documents"], data["metadatas"], strict=True)]
+            self._bm25 = (data["ids"], BM25(corpus))
+            self._bm25_key = key
+        return self._bm25
+
+    def search(self, query: str, k: int, mode: str = "hybrid") -> list[Hit]:
+        """Top-k chunks. "vector" ranks by embedding similarity only; "hybrid" fuses that ranking
+        with BM25 keyword ranking (Reciprocal Rank Fusion). Hit.score is always cosine similarity."""
+        if mode not in SEARCH_MODES:
+            raise ValueError(f"search mode must be one of {SEARCH_MODES}")
+        n = self.count()
+        if n == 0:
             return []
-        result = self._collection.query(
-            query_embeddings=self.embed([query], kind="query"),
-            n_results=min(k, self.count()),
-        )
-        return [
-            Hit(text=doc, source=meta["source"], page=int(meta["page"]), score=1.0 - dist,
-                section=meta.get("section", ""))
-            for doc, meta, dist in zip(result["documents"][0], result["metadatas"][0], result["distances"][0],
-                                       strict=True)
-        ]
+        query_vector = self.embed([query], kind="query")[0]
+        # Fixed candidate pool so the ranking doesn't depend on k: top-4 is always a prefix of top-10.
+        pool = min(n, k if mode == "vector" else max(CANDIDATE_POOL, k))
+        vector_ids = self._collection.query(query_embeddings=[query_vector], n_results=pool, include=[])["ids"][0]
+
+        if mode == "vector":
+            ids, keyword_ids = vector_ids[:k], []
+        else:
+            all_ids, bm25 = self._keyword_index()
+            keyword_ids = [all_ids[i] for i in bm25.top(query, pool)]
+            # Exact identifiers (D13, BR-05) are where embeddings are weakest, so trust keywords more.
+            keyword_weight = 2.0 if any(is_identifier(t) for t in tokenize(query)) else 1.0
+            ids = reciprocal_rank_fusion([vector_ids, keyword_ids], weights=[1.0, keyword_weight])[:k]
+
+        got = self._collection.get(ids=ids, include=["documents", "metadatas", "embeddings"])
+        by_id = dict(zip(got["ids"], zip(got["documents"], got["metadatas"], got["embeddings"], strict=True),
+                         strict=True))
+        q = np.asarray(query_vector, dtype=float)
+        hits = []
+        for chunk_id in ids:
+            doc, meta, emb = by_id[chunk_id]
+            e = np.asarray(emb, dtype=float)
+            cosine = float(e @ q / ((np.linalg.norm(e) * np.linalg.norm(q)) or 1.0))
+            in_vec, in_kw = chunk_id in vector_ids, chunk_id in keyword_ids
+            via = "both" if in_vec and in_kw else ("keyword" if in_kw else "meaning")
+            hits.append(Hit(text=doc, source=meta["source"], page=int(meta["page"]), score=cosine,
+                            section=meta.get("section", ""), via=via))
+        return hits
