@@ -17,6 +17,7 @@ class Hit:
     source: str
     page: int
     score: float  # cosine similarity, higher is better
+    section: str = ""
 
 
 class VectorStore:
@@ -45,6 +46,13 @@ class VectorStore:
     def count(self) -> int:
         return self._collection.count()
 
+    def sources(self) -> list[str]:
+        """Distinct document paths currently in the index."""
+        if self.count() == 0:
+            return []
+        metadatas = self._collection.get(include=["metadatas"])["metadatas"]
+        return sorted({m["source"] for m in metadatas})
+
     def reset(self) -> None:
         try:
             self._client.delete_collection(self.name)
@@ -59,7 +67,7 @@ class VectorStore:
                 ids=[c.id for c in batch],
                 documents=[c.text for c in batch],
                 embeddings=self.embed([c.text for c in batch], kind="document"),
-                metadatas=[{"source": c.source, "page": c.page} for c in batch],
+                metadatas=[{"source": c.source, "page": c.page, "section": c.section} for c in batch],
             )
 
     def search(self, query: str, k: int) -> list[Hit]:
@@ -70,6 +78,7 @@ class VectorStore:
             n_results=min(k, self.count()),
         )
         return [
-            Hit(text=doc, source=meta["source"], page=int(meta["page"]), score=1.0 - dist)
+            Hit(text=doc, source=meta["source"], page=int(meta["page"]), score=1.0 - dist,
+                section=meta.get("section", ""))
             for doc, meta, dist in zip(result["documents"][0], result["metadatas"][0], result["distances"][0])
         ]

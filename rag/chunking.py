@@ -17,6 +17,7 @@ class Chunk:
     text: str
     source: str
     page: int
+    section: str = ""
 
 
 def normalize(text: str) -> str:
@@ -60,8 +61,12 @@ def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 
 def chunk_pages(pages: list[Page], chunk_size: int, overlap: int) -> list[Chunk]:
+    """Chunk every page. Markdown chunks are prefixed with their heading path ("contextual
+    headers"), so a passage from "Module C — Dispatch" still says so after it is cut out."""
     chunks: list[Chunk] = []
     for page in pages:
         for i, piece in enumerate(split_text(page.text, chunk_size, overlap)):
-            chunks.append(Chunk(f"{page.source}::p{page.page}::c{i}", piece, page.source, page.page))
+            text = f"{page.section}\n\n{piece}" if page.section else piece
+            chunk_id = f"{page.source}::p{page.page}::s{page.part}::c{i}"
+            chunks.append(Chunk(chunk_id, text, page.source, page.page, page.section))
     return chunks
