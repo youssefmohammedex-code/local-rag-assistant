@@ -256,6 +256,47 @@ Questions like *"describe every module"* or *"list all the decisions"* need **ev
 - **Caveat:** the PDF list evidence is only 3 questions. One more held-out question was planned, but two of the three generated candidates had to be dropped (an empty list, and items that were common words).
 - **Questions that don't name their subject are ambiguous:** in "Which command prints the variables in JSON format?", orjson is *about* JSON.
 
+### Long list answers: helping the 7B model not skip items
+
+**Once retrieval delivered every item, the remaining errors came from qwen2.5:7b itself.** Given 10+ sections in one prompt, it skipped some, merged others, and attached examples to the wrong section. I compared three generation strategies end-to-end (Detailed mode), all using the same retrieved passages:
+
+- **single:** one call, as before.
+- **checklist:** one call, with the outline of the expanded sections added to the prompt.
+- **per-item:** one call per 3 sections, each seeing only its own sections' passages.
+
+Coverage is the share of expected items found in the answer. **Every answer was also read by hand,** because the automatic score is fooled both ways: it gave 44% to a complete answer that dropped the "Module B —" prefix, and 100% to an answer with invented content.
+
+| 6 list questions (used while designing) | Coverage | Total time | Notes |
+|---|---|---|---|
+| single | 94.7% | 37 min | Rich README: skipped 2 of 10 sections, put the Console example under "Rich Print" |
+| checklist, strict ("exactly these headings") | 96.7% | 23 min | padded answers with the unrelated 2nd expanded list (13 headings for an 8-section handbook); orjson FAQ 100% → 80% |
+| per-item | 96.7% | 37 min | same padding problem, slowest, choppy answers |
+| **checklist, soft (default)** | **96.7%** | **14 min** | exactly the right headings on 5 of 6 questions |
+
+**Held-out check:** the soft wording was revised once after seeing these 6 questions, so it was re-tested on 6 list questions from documents it was never tuned on:
+
+| Held-out list question | single | checklist |
+|---|---|---|
+| orjson: types it serializes natively | 88% | 100% |
+| orjson: option flags | 100% | 100% |
+| Typer: sections of the README | 100% | 100% |
+| charset-normalizer: top-level sections | 80% | 100% |
+| Typer: walk through the example upgrade | partial (content right, sections unnamed) | 67%, padded with unrelated sections |
+| httpcore guide (PDF) | wrong (listed changelog keywords) | right headings, **invented content** |
+| Time (first 5 questions) | 20 min | **9.5 min** |
+
+- **Wins:** checklist was never worse on coverage, never skipped a section that exists as a heading, and is about **2× faster**, because it doesn't pad.
+- **What it doesn't fix:**
+  - **Items that live inside a section's text, not as headings,** don't benefit. orjson's 5 FAQ questions scored 100%, 80% and 60% across runs; that's run-to-run variance at temperature 0.1.
+  - **An outline can invite confident invention.** On httpcore the model wrote plausible facts with citations that don't support them. The single strategy was also wrong there, just more obviously.
+- **Tried and reverted:**
+  - A strict "exactly these headings" outline: it forced unrelated sections into the answer.
+  - Outlining only the best-matching list: it would break annotated-types, whose constraints are in the second-ranked list.
+  - Listing each section's passage ids in the outline: it lowered coverage on 3 of 13 questions and did not stop the httpcore invention.
+- **Not counted as a model failure:** "List every 2.14 release of pydantic" scores 0% with both strategies, because only 38% of the releases are retrieved. That's a retrieval gap.
+
+Choose the strategy with `RAG_LIST_ANSWERS` or `python -m rag ask --list-answers single|checklist|per-item`. Concise mode and non-list questions always use one plain call.
+
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
 Both models were tested with the same retrieval (1000-character chunks, k=4, Concise mode). `qwen2.5:7b` judged every answer, and the private set was also **checked by hand** because a model judging its own answers can be biased. Every answer is saved to `eval/results/*_answers.jsonl` so the grading can be audited.
@@ -276,7 +317,7 @@ Both models were tested with the same retrieval (1000-character chunks, k=4, Con
 
 ## Configuration
 
-Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chunk-overlap`, `-k` and `--model`:
+Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chunk-overlap`, `-k`, `--model`, `--mode`, `--retrieval` and `--list-answers`:
 
 | Variable | Default |
 |---|---|
@@ -285,7 +326,8 @@ Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chu
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `1000` / `150` (best config in the eval) |
 | `RAG_ANSWER_MODE` | `detailed` (or `concise`) |
 | `RAG_RETRIEVAL` | `hybrid` (or `vector`) |
-| `RAG_EXPAND_LISTS` / `RAG_LIST_CHAR_BUDGET` | `1` / `16000` (set `0` to disable list expansion) |
+| `RAG_EXPAND_LISTS` / `RAG_LIST_CHAR_BUDGET` | `1` / `20000` (set `0` to disable list expansion) |
+| `RAG_LIST_ANSWERS` | `checklist` (or `single`, `per-item`; see "Long list answers") |
 | `RAG_TOP_K` | per mode: `10` detailed, `4` concise |
 | `RAG_NUM_CTX` | `8192` |
 | `RAG_DOCS_DIR` | `data/docs` |
@@ -322,7 +364,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 102 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 109 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
