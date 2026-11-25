@@ -31,6 +31,9 @@ def cmd_ingest(args: argparse.Namespace) -> None:
           f"in {time.perf_counter() - start:.1f}s")
     for source in report.skipped:
         print(f"  Skipped {source}: no extractable text (empty, unreadable, or a scanned PDF that needs OCR)")
+    if report.unsupported:
+        print(f"  Ignored {len(report.unsupported)} unsupported file(s) (supported: .pdf, .md, .txt): "
+              + ", ".join(report.unsupported))
 
 
 def cmd_ask(args: argparse.Namespace) -> None:

@@ -72,6 +72,31 @@ def test_unreadable_files_are_reported_not_silently_dropped(tmp_path):
     assert sorted(skipped) == ["broken.pdf", "empty.txt", "headings-only.md", "scanned.pdf"]
 
 
+def test_windows_1252_text_keeps_its_characters(tmp_path):
+    (tmp_path / "legacy.txt").write_bytes("Café “quotes” – €5".encode("cp1252"))
+    assert load_documents(tmp_path)[0].text == "Café “quotes” – €5"
+
+
+def test_utf8_bom_is_removed(tmp_path):
+    (tmp_path / "bom.txt").write_bytes("﻿Hello".encode())
+    assert load_documents(tmp_path)[0].text == "Hello"
+
+
+def test_unsupported_and_hidden_files(tmp_path):
+    for name in ["report.docx", "page.html", "~$lock.md", ".hidden.md", ".obsidian/workspace.md", "ok.md"]:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("# T\n\nText.", encoding="utf-8")
+    unsupported: list[str] = []
+    pages = load_documents(tmp_path, unsupported=unsupported)
+    assert [p.source for p in pages] == ["ok.md"]  # lock/hidden files ignored entirely
+    assert sorted(unsupported) == ["page.html", "report.docx"]
+
+
+def test_ingest_report_lists_unsupported_files(pipeline):
+    write_docs(pipeline, **{"a.txt": "Alpha text.", "b.docx": "fake"})
+    assert pipeline.ingest().unsupported == ["b.docx"]
+
+
 def test_ingest_report_lists_skipped_files(pipeline):
     write_docs(pipeline, **{"a.txt": "Alpha text."})
     make_pdf(pipeline.settings.docs_dir / "scan.pdf", [])

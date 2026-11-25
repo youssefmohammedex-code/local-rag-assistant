@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -117,6 +118,7 @@ class IngestReport:
     chunks: int
     files: int
     skipped: list[str]  # files that produced no text (e.g. scanned PDFs without a text layer)
+    unsupported: list[str] = dataclasses.field(default_factory=list)  # e.g. .docx, .html
 
 
 @dataclass
@@ -146,7 +148,8 @@ class RAGPipeline:
         An empty or misconfigured docs folder raises NoDocumentsError instead of wiping the index.
         """
         skipped: list[str] = []
-        pages = load_documents(self.settings.docs_dir, skipped=skipped)
+        unsupported: list[str] = []
+        pages = load_documents(self.settings.docs_dir, skipped=skipped, unsupported=unsupported)
         chunks = chunk_pages(pages, self.settings.chunk_size, self.settings.chunk_overlap)
         if not chunks:
             raise NoDocumentsError(
@@ -157,7 +160,8 @@ class RAGPipeline:
         if reset:
             self.store.reset()
         self.store.add(chunks, embeddings)
-        return IngestReport(chunks=len(chunks), files=len({c.source for c in chunks}), skipped=skipped)
+        return IngestReport(chunks=len(chunks), files=len({c.source for c in chunks}), skipped=skipped,
+                            unsupported=unsupported)
 
     def default_k(self, mode: str | None = None) -> int:
         return self.settings.top_k or MODES[mode or self.settings.answer_mode].k

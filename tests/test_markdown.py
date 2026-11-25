@@ -50,6 +50,31 @@ def test_markdown_chunks_carry_contextual_header(tmp_path):
     assert len({c.id for c in chunks}) == len(chunks)
 
 
+def test_setext_headings_are_recognized():
+    text = "Title\n=====\n\nIntro.\n\nPart One\n--------\nAlpha text.\n"
+    assert dict(split_markdown(text)) == {"Title": "Intro.", "Title > Part One": "Alpha text."}
+
+
+def test_horizontal_rule_after_a_paragraph_is_not_a_heading():
+    text = "# Doc\n\nLine one of a paragraph\nline two\n---\nAfter the rule.\n"
+    sections = dict(split_markdown(text))
+    assert list(sections) == ["Doc"] and "After the rule." in sections["Doc"]
+
+
+def test_table_separator_is_not_a_setext_heading():
+    text = "# Doc\n\n| A | B |\n|---|---|\n| 1 | 2 |\n"
+    assert list(dict(split_markdown(text))) == ["Doc"]
+
+
+def test_front_matter_is_removed():
+    text = "---\ntitle: Notes\ntags: [a]\n---\n# Notes\n\nBody.\n"
+    assert split_markdown(text) == [("Notes", "Body.")]
+
+
+def test_bom_does_not_hide_the_first_heading():
+    assert split_markdown("﻿# Title\n\nBody.") == [("Title", "Body.")]
+
+
 def test_pretty_source_strips_notion_ids_and_folders():
     assert pretty_source("notes/Architecture v2 421ffbd20ecf8156af6af5e02dca24c2.md") == "Architecture v2"
     assert pretty_source("sample/student-handbook.md") == "student-handbook"

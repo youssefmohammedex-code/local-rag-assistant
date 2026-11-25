@@ -142,6 +142,9 @@ def reindex(pipeline: RAGPipeline, label: str, notes: list[str] | None = None) -
         flash += [("info", note) for note in notes or []]
         flash += [("warning", f"Skipped **{s}**: no extractable text (empty, unreadable, or a scanned PDF "
                               "that needs OCR).") for s in report.skipped]
+        if report.unsupported:
+            flash.append(("warning", f"Ignored {len(report.unsupported)} unsupported file(s): "
+                                     f"{', '.join(report.unsupported)}. Supported: .pdf, .md, .txt."))
         st.session_state.flash = flash
         st.session_state.skipped = set(report.skipped)  # known-unreadable files aren't "pending"
     st.rerun()
