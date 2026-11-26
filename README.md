@@ -338,11 +338,31 @@ Choose the strategy with `RAG_LIST_ANSWERS` or `python -m rag ask --list-answers
 
 One caveat on the held-out row: Typer's upgrade question is one where the chooser abstained. Its 67% → 100% change came with document order and may partly be run-to-run variance.
 
-**Known limit (not invented content):**
-- **The question:** *"List every httpcore release in the changelog."*
-- **What works:** the answer lists all 39 releases in order.
-- **What fails:** under most releases the model writes a filler bullet like "not relevant to the question", instead of that release's changes. It seems to read "list every release" as asking for names only, while the outline asks for bullets under each heading.
-- **Tried and reverted:** renumbering the passages 1..n in document order, with citations mapped back. It didn't help here, and pydantic dropped to 88%.
+### Known limit: filler under each item of a whole-changelog list
+
+**What happens:**
+- **The questions:** ones that ask only for the names of a changelog's releases, e.g. *"Which releases does the python-dotenv changelog list?"*
+- **What works:** the answer usually names every release, in order.
+- **What fails:** under each release, qwen2.5:7b writes a filler bullet such as "No specific versions mentioned" or "not relevant to the question". The passages it was shown do contain that release's changes. It's not invented content, but the answer doesn't say what changed.
+
+**How it was measured:**
+- **The questions:** every changelog in the test corpora with 5+ releases (httpcore, python-dotenv, pydantic), each asked in 3 phrasings. They were generated, not hand-picked.
+- **The score:** the share of a section's bullets that only say there is nothing there.
+- **A check on the score itself:** it reads 0 on all 13 regular list questions.
+
+| Wording of the per-section instruction | python-dotenv (held out) | httpcore | pydantic |
+|---|---|---|---|
+| current: "1-3 bullet points using only the passages from that section" | 84 of 84 sections filler (2 phrasings) | 35 of 39 | none |
+| + "summarize ... even when the question only asks for the names" | still filler; one answer looped | 102 of 102 | **real changes** under each release |
+| + "never write that a section has no information" (every outlined section has passages) | still filler, all 3 phrasings | not finished (stopped once python-dotenv failed) | not run |
+
+**Decision:** none of the wordings fixed the documents they weren't tuned on, so the original wording stays.
+
+**Also tried and reverted:** numbering passages 1..n in document order, with citations mapped back to their real ids. It didn't help, and the pydantic 2.14 question dropped to 88%.
+
+**Why it's probably hard to fix with wording:** the model seems to check each section's text for the thing the question asks about, like "versions". An instruction that's needed elsewhere invites exactly that check: *"if the items the question asks for are listed inside a section's text, use those items as headings"*. orjson's FAQ depends on it.
+
+**A likely structural fix, not done yet:** for questions that ask only for names, build the list of names directly from the outline, which needs no model call, and let the model add a summary per item.
 
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
