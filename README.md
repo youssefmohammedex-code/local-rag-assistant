@@ -377,6 +377,7 @@ Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chu
 | `RAG_LIST_ANSWERS` | `checklist` (or `single`, `per-item`; see "Long list answers") |
 | `RAG_TOP_K` | per mode: `10` detailed, `4` concise |
 | `RAG_NUM_CTX` | `8192` |
+| `RAG_MAX_ANSWER_TOKENS` | `3000` (stops a model stuck repeating itself; see "Reliability") |
 | `RAG_DOCS_DIR` | `data/docs` |
 
 ## Project structure
@@ -406,12 +407,13 @@ tests/           unit tests (pytest, no Ollama needed)
   - Office lock files (`~$x.md`) and hidden folders (`.obsidian/`) that were indexed
 
   The fixes were checked to leave every existing document's output unchanged.
+- **Answers can't run forever:** answers are capped at 3,000 tokens (`RAG_MAX_ANSWER_TOKENS`). Without a cap, qwen2.5:7b fell into repetition on long list questions twice in benchmarks. One answer ran for 55 minutes, past 8,600 tokens, until it was cancelled. Another took 8.8 hours and produced 345,000 characters. The longest normal answer in every benchmark run is about 6,500 characters (~1,700 tokens), well under the cap.
 - **Actionable errors:** the CLI and the app show messages like *"Can't reach Ollama…"* or *"The model `x` isn't installed. Run `ollama pull x`"* instead of stack traces.
 
 ## Tests
 
 ```bash
-pytest          # 124 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 125 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap

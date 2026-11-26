@@ -125,6 +125,12 @@ def test_checklist_keeps_both_lists_when_the_orders_disagree(pipeline):
     assert len(shown) == len(hits)
 
 
+def test_answers_have_a_length_cap(pipeline):
+    """A model stuck repeating itself once generated for 55 minutes: every answer call is capped."""
+    request = pipeline._request("q", [], "detailed")
+    assert request["options"]["num_predict"] == pipeline.settings.max_answer_tokens > 0
+
+
 def test_unknown_strategy_is_rejected(pipeline):
     import pytest
 

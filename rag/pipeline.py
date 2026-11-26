@@ -330,7 +330,8 @@ class RAGPipeline:
         return {
             "model": self.settings.llm_model,
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-            "options": {"temperature": self.settings.temperature, "num_ctx": self.settings.num_ctx},
+            "options": {"temperature": self.settings.temperature, "num_ctx": self.settings.num_ctx,
+                        "num_predict": self.settings.max_answer_tokens},
         }
 
     def choose_list(self, question: str) -> int | None:

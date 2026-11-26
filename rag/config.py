@@ -41,6 +41,9 @@ class Settings:
     list_answers: str = field(default_factory=lambda: os.getenv("RAG_LIST_ANSWERS", "checklist"))
     # Ollama's default context window is small; 10 passages + a long answer needs more room.
     num_ctx: int = field(default_factory=lambda: _env_int("RAG_NUM_CTX", 8192))
+    # Cap on answer length (tokens). Without it a 7B model that falls into repetition never stops:
+    # one list answer ran for 55 minutes and 8,600+ tokens. The longest normal answer seen is ~1,700.
+    max_answer_tokens: int = field(default_factory=lambda: _env_int("RAG_MAX_ANSWER_TOKENS", 3000))
     temperature: float = 0.1
 
     @property
