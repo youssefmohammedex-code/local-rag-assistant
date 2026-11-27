@@ -7,6 +7,7 @@ import dataclasses
 import sys
 import time
 
+from rag import citations
 from rag.config import Settings
 from rag.errors import friendly_error
 from rag.loaders import pretty_source
@@ -41,9 +42,16 @@ def cmd_ask(args: argparse.Namespace) -> None:
     if pipeline.store.count() == 0:
         sys.exit(f"Collection '{pipeline.store.name}' is empty. Run `python -m rag ingest` first.")
     hits = pipeline.retrieve(args.question)
+    answer = ""
     for token in pipeline.stream(args.question, hits):
+        answer += token
         print(token, end="", flush=True)
-    print("\n\nSources:")
+    checks = pipeline.check_citations(answer, hits)
+    if checks:
+        print(f"\n\nCitation check: {citations.summary(checks)}")
+        for line in citations.issues(checks):
+            print(f"  ! {line}")
+    print("\n\nSources:" if not checks else "\nSources:")
     for i, hit in enumerate(hits, start=1):
         where = hit.section.split(" > ")[-1] if hit.section else f"p.{hit.page}"
         if hit.section and hit.source.lower().endswith(".pdf"):

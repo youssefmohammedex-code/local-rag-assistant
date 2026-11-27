@@ -10,6 +10,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from rag import citations
 from rag.config import Settings
 from rag.errors import friendly_error
 from rag.loaders import SUPPORTED_SUFFIXES, pretty_source
@@ -81,12 +82,16 @@ def get_pipeline(model: str) -> RAGPipeline:
     return RAGPipeline(dataclasses.replace(Settings(), llm_model=model))
 
 
+CITATION = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")  # [3] or [1, 3]
+
+
 def with_citation_badges(text: str) -> str:
-    return re.sub(r"\[(\d{1,2})\]", r'<span class="cite">\1</span>', text)
+    return CITATION.sub(lambda m: "".join(f'<span class="cite">{n}</span>' for n in re.findall(r"\d+", m.group(1))),
+                        text)
 
 
 def cited_ids(text: str) -> set[int]:
-    return {int(n) for n in re.findall(r"\[(\d{1,2})\]", text)}
+    return {int(n) for m in CITATION.finditer(text) for n in re.findall(r"\d+", m.group(1))}
 
 
 def source_cards(hits: list[Hit], answer: str) -> str:
@@ -121,6 +126,15 @@ def render_assistant(message: dict) -> None:
     st.markdown(with_citation_badges(message["content"]), unsafe_allow_html=True)
     if message.get("meta"):
         st.markdown(f'<div class="meta">{message["meta"]}</div>', unsafe_allow_html=True)
+    checks = message.get("checks") or []
+    problems = citations.issues(checks)
+    if problems:
+        with st.expander(f"⚠️ Citation check · {citations.summary(checks)}"):
+            st.caption("Checked by word overlap with each passage, so a flag means \"verify this\", not \"wrong\".")
+            st.markdown("\n".join(f"- {html.escape(line)}" for line in problems))
+    elif checks:
+        st.markdown(f'<div class="meta">✓ Citation check · {citations.summary(checks)}</div>',
+                    unsafe_allow_html=True)
     if message.get("hits"):
         n_cited = len(cited_ids(message["content"]) & set(range(1, len(message["hits"]) + 1)))
         n_list = sum(h.via == "section" for h in message["hits"])
@@ -287,7 +301,9 @@ if question:
                 stats = pipeline.last_stats
                 meta = (f"{html.escape(model)} · {len(hits)} passages · {stats.tokens} tokens · "
                         f"{stats.tokens_per_second:.1f} tok/s · {time.perf_counter() - start:.0f}s")
-                reply = {"role": "assistant", "content": text.strip(), "hits": hits, "meta": meta}
+                checks = pipeline.check_citations(text, hits)
+                reply = {"role": "assistant", "content": text.strip(), "hits": hits, "meta": meta,
+                         "checks": checks}
                 render_assistant(reply)
             except Exception as exc:  # most often: Ollama is not running or the model isn't pulled
                 reply = {"role": "assistant", "content": f"⚠️ {friendly_error(exc)}"}
