@@ -364,6 +364,53 @@ One caveat on the held-out row: Typer's upgrade question is one where the choose
 
 **A likely structural fix, not done yet:** for questions that ask only for names, build the list of names directly from the outline, which needs no model call, and let the model add a summary per item.
 
+### Checking citations
+
+**Why:** qwen2.5:7b often cites by position rather than content. It puts [1], [2], [3] under the 1st, 2nd and 3rd headings, whatever those passages say. It also moves a fact to a neighbouring heading. A citation is a claim to verify, not a fact.
+
+**How:** after the answer is written, every cited sentence is compared with every passage it was given. This uses plain word overlap, with no extra model call; it takes milliseconds.
+- **The score:** the share of the sentence's content words that the passage contains.
+- **Supported:** a cited passage contains at least half of them.
+- **Miscited:** no cited passage does, but another passage clearly does, and that one is named as the likely right source.
+- **Unsupported:** no passage does. The sentence may be invented, or paraphrased too loosely to check.
+
+The app shows the result under each answer. It's a single ✓ line when everything checks out, or a "Citation check" list of the sentences to verify. The CLI prints the same.
+
+**Three rules, each added for a failure found in real answers:**
+- **Numbers and codes must match:** "Python 3.6" is not supported by a passage that says 3.8, however many other words they share. The same goes for `#478`, `v2.11.8`, "Module C" and "2 weeks".
+- **Only a passage's own section counts:**
+  - **The problem:** a passage can run on into the next sections. The one for release 0.14.6 ends with "0.14.5 (January 18th, 2022)" and that release's changes, so a 0.14.5 change cited for 0.14.6 looked supported.
+  - **The rule:** a passage is cut where another section of the same document begins.
+  - **Exception 1:** its own sub-sections (a release's "Fixed") don't end it.
+  - **Exception 2:** text it runs on into still counts for a sentence written under that section's heading.
+- **A sentence that names a version may use that version's text:** "v2.11.8: Fix mypy plugin" may use the v2.11.8 text that a neighbouring passage runs on into.
+
+**How it was evaluated:**
+- **Answers that already existed:** saved benchmark answers, re-checked against the passages they were generated from. No answer was generated for this.
+- **Hand-labeling:** every flag was read by hand, and so was a random sample of what it called supported.
+- **Freezing:** the rules were fixed before the unseen sets. Set 2 was never used for any change.
+
+| Set | Claims | Flags that are real errors | Wrong claims missed |
+|---|---|---|---|
+| Known-bad: two old httpcore answers with invented content (used to design the rules) | 66 | — | caught 35 of 36, 1 false alarm in 30 correct claims |
+| Unseen set 1: 14 list answers | 172 | 12 of 14 | 0 in a sample of 40 |
+| Unseen set 2: 11 list answers (no change made after seeing it) | 112 | **10 of 10** | 1 in a sample of 30 |
+
+**What it found in answers that scored 100% on coverage:**
+- **The student handbook answer:** probation, graduation and exam rules cite the lab-safety or grading passages: 5 sentences in one run and 6 in another.
+- **orjson:** two option flags cite each other's passages.
+- **Typer:** "FastAPI's little sibling" cites the Installation passage.
+
+**Limits:**
+- **No judgment of meaning:** a sentence that reuses a passage's words but reverses what it says would pass.
+- **Generic sentences can pass on shared words alone.** In the known-bad set, "the major version is incremented for backwards incompatible changes" shared "major", "version" and "changes" with the versioning passage.
+- **The 2 false alarms on set 1:**
+  - **Rich:** a summary of Rich's examples that the cited passage introduces under other words.
+  - **pydantic:** a release change filed under a sub-heading whose release line carries extra link text.
+- **Stricter thresholds:** at 0.6 it caught one more real error on the regular answers but added three false alarms on fair paraphrases ("brute force approach" for "I'm brute forcing"), so 0.5 stays.
+
+The checker also flags filler. "No relevant information provided [1]" comes out unsupported in 88 of 88 cases.
+
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
 Both models were tested with the same retrieval (1000-character chunks, k=4, Concise mode). `qwen2.5:7b` judged every answer, and the private set was also **checked by hand** because a model judging its own answers can be biased. Every answer is saved to `eval/results/*_answers.jsonl` so the grading can be audited.
@@ -410,6 +457,7 @@ rag/
   store.py       Chroma + Ollama embeddings
   pipeline.py    retrieve → prompt → generate
   loops.py       stops an answer once the model starts repeating itself
+  citations.py   checks each cited sentence against the passages it cites
   cli.py         `python -m rag ingest | ask`
 app.py           Streamlit chat UI
 eval/            question set + benchmarking harness
@@ -440,7 +488,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 131 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 142 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
