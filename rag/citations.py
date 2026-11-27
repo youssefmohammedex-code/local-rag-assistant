@@ -156,7 +156,7 @@ def segments(passage: str, section: str, paths: set[str]) -> list[tuple[str | No
     return parts
 
 
-def _same_heading(a: str | None, b: str | None) -> bool:
+def same_heading(a: str | None, b: str | None) -> bool:
     a, b = (re.sub(r"[^a-z0-9]+", " ", (x or "").lower()).strip() for x in (a, b))
     return bool(a and b) and (a == b or (min(len(a), len(b)) >= 4 and (a in b or b in a)))
 
@@ -169,7 +169,7 @@ def _versions(text: str) -> set[str]:
 def _belongs(segment_heading: str | None, claim: str, under: str | None) -> bool:
     """May a claim use text a passage runs on into from this other section? Yes when the claim is
     written under that section's heading, or names its version ("v2.11.8: Fix mypy plugin")."""
-    return _same_heading(segment_heading, under) or bool(_versions(segment_heading or "") & _versions(claim))
+    return same_heading(segment_heading, under) or bool(_versions(segment_heading or "") & _versions(claim))
 
 
 def check_citations(answer: str, passages: list[str], sections: list[str] | None = None,

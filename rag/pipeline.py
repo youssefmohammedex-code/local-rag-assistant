@@ -11,9 +11,11 @@ import ollama
 
 from rag.bm25 import identifiers
 from rag.chunking import chunk_pages
-from rag.citations import CitationCheck, check_citations
+from rag.citations import CitationCheck, check_citations, same_heading, segments
 from rag.config import Settings
 from rag.errors import NoDocumentsError
+from rag.filler import filler_headings, is_filler, splice
+from rag.filler import sections as answer_sections
 from rag.loaders import load_documents, pretty_source
 from rag.loops import LoopDetector
 from rag.store import Hit, VectorStore, children_in_outline
@@ -175,6 +177,43 @@ def choose_list_prompt(question: str, lists: list) -> str:
     options = "\n".join(f"{letter}: {describe_list(*lst)}" for letter, lst in zip("AB", lists, strict=True))
     return (f"Question: {question}\n\nTwo lists of sections from the documents:\n{options}\n\n"
             "Which list's sections does the question ask about? Answer with the single letter A or B.")
+
+
+REPAIR_QUESTION = "What does each of these sections of the documents say?"
+REPAIR_ITEMS_PER_CALL = 8  # filler sections regenerated per model call
+
+
+def plain_name(name: str) -> str:
+    """A section name without square brackets: Keep-a-Changelog headings like "[0.17.1] - 2021-04-29"
+    made the model write passage ids ("### [26]") as headings."""
+    return re.sub(r"\s+", " ", name.replace("[", "").replace("]", "")).strip()
+
+
+def repair_instructions(items: list[ListItem]) -> str:
+    names = "\n".join(f"### {plain_name(item.name)}" for item in items)
+    return ("For each of these sections, in this order, write its heading exactly as given and under it "
+            "1-3 bullet points with the main points of the passages from that section:\n"
+            f"{names}\nUse only the passages from that section. Do not add any other headings or an introduction.")
+
+
+def fix_item_citations(body: str, passages: list[int]) -> str:
+    """Citations in a regenerated section must be that section's passages. Others (often a pull
+    request number like [#700] copied as [700]) become its passage if it has one, else are dropped.
+    A section regenerated from one passage can only say what that passage says, so its uncited
+    bullets get that citation and a lone "[34]" line after them is removed (the model left 213 of
+    378 bullets uncited)."""
+    def fix(match: re.Match) -> str:
+        ids = [int(n) for n in re.findall(r"\d+", match.group(1))]
+        if all(i in passages for i in ids):
+            return match.group(0)
+        return f"[{passages[0]}]" if len(passages) == 1 else ""
+    body = re.sub(r"\[(\d+(?:\s*,\s*\d+)*)\]", fix, body)
+    if len(passages) != 1:
+        return body
+    lines = [line for line in body.split("\n") if not re.fullmatch(r"\s*\[\d+\]\s*", line)]
+    cite = f"[{passages[0]}]"
+    return "\n".join(line if not re.match(r"\s*[-*] ", line) or re.search(r"\[\d+\]", line)
+                     else f"{line.rstrip()} {cite}" for line in lines)
 
 
 def per_item_instructions(items: list[ListItem]) -> str:
@@ -363,7 +402,10 @@ class RAGPipeline:
         return picks[0] if picks[0] == picks[1] else None
 
     def generate(self, question: str, hits: list[Hit], mode: str | None = None) -> str:
-        return "".join(self.stream(question, hits, mode)).strip()
+        """The full answer, with filler sections of a list answer regenerated (repair_filler).
+        Streaming callers (app, CLI) call repair_filler themselves after the stream ends."""
+        answer = "".join(self.stream(question, hits, mode)).strip()
+        return self.repair_filler(question, hits, answer)[0]
 
     def _stream_call(self, request: dict) -> Iterator[str]:
         """Stream one model call. Stops early, with a note, if the model starts repeating itself
@@ -425,6 +467,44 @@ class RAGPipeline:
                                     instructions=per_item_instructions(batch))
             yield from self._stream_call(request)
             yield "\n\n"
+
+    def repair_filler(self, question: str, hits: list[Hit], answer: str) -> tuple[str, int]:
+        """Regenerate the sections of a list answer that are only filler (see rag.filler), without
+        the question that triggered it: a few sections per call, each call seeing only those
+        sections' passages under their real ids, cut to the section's own text (a passage runs on
+        into the next sections, and the model mixed a neighbouring release's changes in). Returns
+        (answer, sections repaired). A section is kept as it was if it can't be matched to a list
+        item or its new text is filler again."""
+        filler = filler_headings(answer)
+        if not filler:
+            return answer, 0
+        items = self.list_items(question, hits)
+        todo = []
+        for heading in filler:
+            item = next((i for i in items if same_heading(i.name, heading)), None)
+            if item and all(item is not other for _, other in todo):
+                todo.append((heading, item))
+        if not todo:
+            return answer, 0
+        paths = self.section_paths(hits)
+        bodies: dict[str, str] = {}
+        for start in range(0, len(todo), REPAIR_ITEMS_PER_CALL):
+            batch = todo[start:start + REPAIR_ITEMS_PER_CALL]
+            ids = sorted({i for _, item in batch for i in item.passages})
+            shown = [dataclasses.replace(hits[i - 1], text=segments(hits[i - 1].text, hits[i - 1].section, paths)[0][1])
+                     for i in ids]
+            request = self._request(REPAIR_QUESTION, shown, "detailed", ids=ids,
+                                    instructions=repair_instructions([item for _, item in batch]))
+            text = "".join(self._stream_call(request))
+            written = [(h, text[s:e]) for h, s, e in answer_sections(text)]
+            for heading, item in batch:
+                body = next((b for h, b in written if same_heading(h, plain_name(item.name))), None)
+                if body is None:  # "### [26]": the model wrote the section's passage id as its heading
+                    body = next((b for h, b in written if re.fullmatch(r"\[?(\d+)\]?", h.strip())
+                                 and int(h.strip("[] ")) in item.passages), None)
+                if body is not None and not is_filler(body):
+                    bodies[heading] = fix_item_citations(body, item.passages)
+        return splice(answer, bodies), len(bodies)
 
     def section_paths(self, hits: list[Hit]) -> set[str]:
         """Every section path in the documents the hits come from."""
