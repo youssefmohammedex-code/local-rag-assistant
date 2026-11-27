@@ -45,6 +45,12 @@ class Settings:
     # one list answer ran for 55 minutes and 8,600+ tokens. The longest normal answer seen is ~1,700.
     max_answer_tokens: int = field(default_factory=lambda: _env_int("RAG_MAX_ANSWER_TOKENS", 3000))
     temperature: float = 0.1
+    # Fixed sampling seed for reproducible answers (benchmarks set it with temperature 0). None: random.
+    seed: int | None = field(default_factory=lambda: _env_int("RAG_SEED", None))
+    # Unload the model after every call, so no call reuses another's cached prompt. A seed alone
+    # didn't make answers repeat: a second run with a cached prompt changed a few words. Slow; for
+    # benchmarks only.
+    cold_calls: bool = field(default_factory=lambda: os.getenv("RAG_COLD_CALLS", "0") == "1")
 
     @property
     def collection_name(self) -> str:

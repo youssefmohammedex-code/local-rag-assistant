@@ -366,14 +366,21 @@ class RAGPipeline:
                     items[path] = ListItem(name, path, passages)
         return list(items.values())
 
+    def _options(self, **options) -> dict:
+        """Ollama options for one call: context size, the given ones, and the seed when one is set."""
+        options = {"num_ctx": self.settings.num_ctx, **options}
+        if self.settings.seed is not None:
+            options["seed"] = self.settings.seed
+        return options
+
     def _request(self, question: str, hits: list[Hit], mode: str | None, ids: list[int] | None = None,
                  instructions: str | None = None) -> dict:
         prompt = build_prompt(question, hits, mode or self.settings.answer_mode, ids=ids, instructions=instructions)
         return {
             "model": self.settings.llm_model,
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-            "options": {"temperature": self.settings.temperature, "num_ctx": self.settings.num_ctx,
-                        "num_predict": self.settings.max_answer_tokens},
+            "options": self._options(temperature=self.settings.temperature,
+                                     num_predict=self.settings.max_answer_tokens),
         }
 
     def choose_list(self, question: str) -> int | None:
@@ -392,7 +399,7 @@ class RAGPipeline:
             request = {
                 "model": self.settings.llm_model,
                 "messages": [{"role": "user", "content": choose_list_prompt(question, [lists[i] for i in order])}],
-                "options": {"temperature": 0, "num_predict": 4, "num_ctx": self.settings.num_ctx},
+                "options": self._options(temperature=0, num_predict=4),
             }
             reply = "".join(self._stream_call(request)).strip().upper()
             match = re.match(r"\W*([AB])\b", reply)
@@ -410,6 +417,8 @@ class RAGPipeline:
     def _stream_call(self, request: dict) -> Iterator[str]:
         """Stream one model call. Stops early, with a note, if the model starts repeating itself
         (see rag.loops); closing the stream makes Ollama cancel the generation."""
+        if self.settings.cold_calls:
+            request = {**request, "keep_alive": 0}
         stream = self._llm.chat(**request, stream=True)
         detector = LoopDetector()
         try:

@@ -131,6 +131,29 @@ def test_answers_have_a_length_cap(pipeline):
     assert request["options"]["num_predict"] == pipeline.settings.max_answer_tokens > 0
 
 
+def test_seed_is_sent_only_when_set(pipeline):
+    assert "seed" not in pipeline._request("q", [], "detailed")["options"]
+    pipeline.settings = dataclasses.replace(pipeline.settings, seed=7, temperature=0)
+    options = pipeline._request("q", [], "detailed")["options"]
+    assert options["seed"] == 7 and options["temperature"] == 0 and options["num_ctx"] == pipeline.settings.num_ctx
+
+
+def test_cold_calls_unload_the_model_after_every_call(pipeline):
+    """A reused cached prompt changed a few words of an otherwise identical seeded answer."""
+    seen = []
+
+    class Recording:
+        def chat(self, stream=False, **request):
+            seen.append(request.get("keep_alive", "default"))
+            yield {"message": {"content": "ok"}, "done": True}
+
+    pipeline._llm = Recording()
+    pipeline.generate("Who owns component C?", [])
+    pipeline.settings = dataclasses.replace(pipeline.settings, cold_calls=True)
+    pipeline.generate("Who owns component C?", [])
+    assert seen == ["default", 0]
+
+
 def test_unknown_strategy_is_rejected(pipeline):
     import pytest
 
