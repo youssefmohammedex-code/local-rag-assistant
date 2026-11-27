@@ -13,6 +13,7 @@ import streamlit as st
 from rag import citations
 from rag.config import Settings
 from rag.errors import friendly_error
+from rag.filler import filler_headings
 from rag.loaders import SUPPORTED_SUFFIXES, pretty_source
 from rag.pipeline import MODES, RAGPipeline
 from rag.store import Hit
@@ -297,10 +298,17 @@ if question:
                     if time.perf_counter() - last_paint > 0.08:
                         placeholder.markdown(with_citation_badges(text) + " ▍", unsafe_allow_html=True)
                         last_paint = time.perf_counter()
+                n_filler, n_repaired = len(filler_headings(text)), 0
+                if n_filler:
+                    placeholder.markdown(with_citation_badges(text), unsafe_allow_html=True)
+                    with st.spinner(f"Filling in {n_filler} section(s) the model left empty…"):
+                        text, n_repaired = pipeline.repair_filler(question, hits, text)
                 placeholder.empty()
                 stats = pipeline.last_stats
                 meta = (f"{html.escape(model)} · {len(hits)} passages · {stats.tokens} tokens · "
                         f"{stats.tokens_per_second:.1f} tok/s · {time.perf_counter() - start:.0f}s")
+                if n_repaired:
+                    meta += f" · {n_repaired} empty section(s) filled in"
                 checks = pipeline.check_citations(text, hits)
                 reply = {"role": "assistant", "content": text.strip(), "hits": hits, "meta": meta,
                          "checks": checks}

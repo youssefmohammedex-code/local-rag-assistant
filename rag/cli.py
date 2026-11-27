@@ -46,6 +46,11 @@ def cmd_ask(args: argparse.Namespace) -> None:
     for token in pipeline.stream(args.question, hits):
         answer += token
         print(token, end="", flush=True)
+    fixed, repaired = pipeline.repair_filler(args.question, hits, answer)
+    if repaired:
+        # The streamed answer had sections with nothing but filler; print the regenerated version.
+        print(f"\n\n--- {repaired} section(s) had only filler; regenerated answer ---\n\n{fixed}", end="")
+        answer = fixed
     checks = pipeline.check_citations(answer, hits)
     if checks:
         print(f"\n\nCitation check: {citations.summary(checks)}")
