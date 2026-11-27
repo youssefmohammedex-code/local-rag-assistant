@@ -11,6 +11,7 @@ import ollama
 
 from rag.bm25 import identifiers
 from rag.chunking import chunk_pages
+from rag.citations import CitationCheck, check_citations
 from rag.config import Settings
 from rag.errors import NoDocumentsError
 from rag.loaders import load_documents, pretty_source
@@ -424,6 +425,15 @@ class RAGPipeline:
                                     instructions=per_item_instructions(batch))
             yield from self._stream_call(request)
             yield "\n\n"
+
+    def section_paths(self, hits: list[Hit]) -> set[str]:
+        """Every section path in the documents the hits come from."""
+        return {section for source in {h.source for h in hits}
+                for _, section in self.store.outline(source) if section}
+
+    def check_citations(self, answer: str, hits: list[Hit]) -> list[CitationCheck]:
+        """Verify an answer's citations against the passages it was given (see rag.citations)."""
+        return check_citations(answer, [h.text for h in hits], [h.section for h in hits], self.section_paths(hits))
 
     def answer(self, question: str, k: int | None = None, mode: str | None = None) -> Answer:
         hits = self.retrieve(question, k or self.default_k(mode))
