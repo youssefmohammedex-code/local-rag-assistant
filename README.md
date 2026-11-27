@@ -433,6 +433,44 @@ The app shows the result under each answer. It's a single ✓ line when everythi
 
 The checker also flags filler. "No relevant information provided [1]" comes out unsupported in 88 of 88 cases.
 
+### Reproducible list-answer benchmark
+
+`eval/list_answers.py` runs the list questions end to end (retrieve, answer, repair filler) and scores:
+- coverage of the expected items
+- headings
+- filler sections left
+- citation check
+- time
+
+It runs with temperature 0, a fixed seed and `--cold` by default, so a rerun on the same machine and Ollama version gives the same answers.
+
+**Why `--cold` is needed:**
+- **A seed alone wasn't enough:** two seeded runs of the Typer README question differed in two sentences' wording.
+- **Why:** the second run reused Ollama's cached copy of the prompt (80 s instead of 157 s), and computing it from cache gives slightly different numbers.
+- **The fix:** `--cold` unloads the model after every call. Two cold runs were then identical character for character, and identical to the first, uncached, run.
+- **The evidence:** `eval/results/determinism_*.md`.
+
+```bash
+# build the test documents first (eval/generalization/README.md), then one command per document set:
+python -m eval.list_answers --cold --docs ../gen/docs --db ../gen/db --out list_answers_gen \
+    --questions eval/generalization/q_lists.jsonl eval/generalization/q_lists_fresh.jsonl eval/generalization/q_lists_heldout.jsonl
+python -m eval.list_answers --cold --docs ../pdf/docs --db ../pdf/db --out list_answers_pdf \
+    --questions eval/generalization/q_pdf_lists.jsonl eval/generalization/q_pdf_lists_heldout.jsonl
+python -m eval.list_answers --cold --docs data/docs/sample --db data/chroma_eval/sample --out list_answers_sample \
+    --questions eval/questions_broad.jsonl
+```
+
+**Baseline (seed 42, temperature 0):** 12 public list questions, 5 used in design and 7 held out.
+- **Coverage:** 11 are at 100%. Typer's "walk me through each part of the example upgrade" is at 67%, so the mean is 97.2%.
+- **Citations:** 124 of 135 cited sentences pass the citation check.
+- **Filler:** no answer has any left.
+- **Time:** about 45 minutes.
+- **Per-question tables:** `eval/results/list_answers_{gen,pdf,sample}.md`.
+
+A correction to the list-chooser results above: the Typer upgrade question showed 100% in one run, flagged there as possibly run-to-run variance. This reproducible run gives 67%.
+
+To measure the spread at the app's real setting instead, use `--temperature 0.1 --seed none --runs 3`. That takes about 3 hours.
+
 ### Model comparison: `llama3.2:3b` vs `qwen2.5:7b`
 
 Both models were tested with the same retrieval (1000-character chunks, k=4, Concise mode). `qwen2.5:7b` judged every answer, and the private set was also **checked by hand** because a model judging its own answers can be biased. Every answer is saved to `eval/results/*_answers.jsonl` so the grading can be audited.
@@ -467,6 +505,8 @@ Set these as environment variables, or pass the CLI flags `--chunk-size`, `--chu
 | `RAG_TOP_K` | per mode: `10` detailed, `4` concise |
 | `RAG_NUM_CTX` | `8192` |
 | `RAG_MAX_ANSWER_TOKENS` | `3000` (stops a model stuck repeating itself; see "Reliability") |
+| `RAG_SEED` | unset (random); set an integer, with temperature 0, for reproducible answers |
+| `RAG_COLD_CALLS` | `0`; `1` unloads the model after every call so answers repeat exactly (slow, for benchmarks) |
 | `RAG_DOCS_DIR` | `data/docs` |
 
 ## Project structure
@@ -511,7 +551,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 149 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 151 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
