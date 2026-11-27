@@ -14,6 +14,7 @@ from rag.chunking import chunk_pages
 from rag.config import Settings
 from rag.errors import NoDocumentsError
 from rag.loaders import load_documents, pretty_source
+from rag.loops import LoopDetector
 from rag.store import Hit, VectorStore, children_in_outline
 
 SYSTEM_PROMPT = (
@@ -140,6 +141,7 @@ class ListItem:
 
 LIST_ANSWERS = ("checklist", "single", "per-item")  # see RAGPipeline.stream
 LIST_ITEMS_PER_CALL = 3  # per-item answers: sections per model call
+LOOP_NOTE = "\n\n*(Answer stopped early: the model started repeating itself.)*"
 
 
 def checklist_instructions(items: list[ListItem]) -> str:
@@ -363,13 +365,26 @@ class RAGPipeline:
         return "".join(self.stream(question, hits, mode)).strip()
 
     def _stream_call(self, request: dict) -> Iterator[str]:
-        for part in self._llm.chat(**request, stream=True):
-            if part.get("done"):
-                self.last_stats = GenerationStats(
-                    tokens=self.last_stats.tokens + (part.get("eval_count") or 0),
-                    seconds=self.last_stats.seconds + (part.get("eval_duration") or 0) / 1e9,
-                )
-            yield part["message"]["content"]
+        """Stream one model call. Stops early, with a note, if the model starts repeating itself
+        (see rag.loops); closing the stream makes Ollama cancel the generation."""
+        stream = self._llm.chat(**request, stream=True)
+        detector = LoopDetector()
+        try:
+            for part in stream:
+                if part.get("done"):
+                    self.last_stats = GenerationStats(
+                        tokens=self.last_stats.tokens + (part.get("eval_count") or 0),
+                        seconds=self.last_stats.seconds + (part.get("eval_duration") or 0) / 1e9,
+                    )
+                text = part["message"]["content"]
+                yield text
+                if detector.feed(text):
+                    yield LOOP_NOTE
+                    return
+        finally:
+            close = getattr(stream, "close", None)
+            if close:
+                close()
 
     def stream(self, question: str, hits: list[Hit], mode: str | None = None) -> Iterator[str]:
         """Stream an answer. Detailed answers to list questions use the configured list strategy

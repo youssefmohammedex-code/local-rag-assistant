@@ -409,6 +409,7 @@ rag/
   chunking.py    boundary-aware overlapping chunker
   store.py       Chroma + Ollama embeddings
   pipeline.py    retrieve → prompt → generate
+  loops.py       stops an answer once the model starts repeating itself
   cli.py         `python -m rag ingest | ask`
 app.py           Streamlit chat UI
 eval/            question set + benchmarking harness
@@ -428,12 +429,18 @@ tests/           unit tests (pytest, no Ollama needed)
 
   The fixes were checked to leave every existing document's output unchanged.
 - **Answers can't run forever:** answers are capped at 3,000 tokens (`RAG_MAX_ANSWER_TOKENS`). Without a cap, qwen2.5:7b fell into repetition on long list questions twice in benchmarks. One answer ran for 55 minutes, past 8,600 tokens, until it was cancelled. Another took 8.8 hours and produced 345,000 characters. The longest normal answer in every benchmark run is about 6,500 characters (~1,700 tokens), well under the cap.
+- **Loops are stopped as soon as they start:** the cap alone still means ~15 minutes of repeated text at ~3 tokens/s on a laptop CPU. So the answer is also watched as it streams.
+  - **The rule:** once citation numbers are ignored, the answer stops when its last lines are one block of 1–30 lines repeated 3 times in a row. A note is added saying why, and the stream is closed, which makes Ollama cancel the generation (checked in its log).
+  - **Checked on every saved benchmark answer:** all 124 were replayed in small chunks, the way tokens stream. It stopped exactly the 3 runaways and none of the other 121, including filler answers that repeat one bullet under 39 different headings. The 8.8-hour answer now stops after 4,700 characters instead of 345,000.
+  - **The margin, honestly:**
+    - **Why 3 copies:** with 2 copies in a row, it would also cut two normal answers whose example code has a similar block twice.
+    - **What gets lost:** one stopped answer (a single line repeated about 48 times) had later recovered and listed the releases. Stopping loses that part, a trade-off for never showing a long loop.
 - **Actionable errors:** the CLI and the app show messages like *"Can't reach Ollama…"* or *"The model `x` isn't installed. Run `ollama pull x`"* instead of stack traces.
 
 ## Tests
 
 ```bash
-pytest          # 125 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 131 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 ## Roadmap
