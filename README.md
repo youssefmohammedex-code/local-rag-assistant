@@ -18,10 +18,11 @@ Every design decision is backed by a measurement, usually on question sets writt
   - **Answer outline:** the answer is written against an outline, so the model can't silently skip items.
 - **Answers you can check:**
   - **Citation checker:** every cited sentence is matched against the passage it cites. Wrong passage ids, invented sentences and facts moved between sections are flagged in the UI.
-  - **Filler repair:** sections the model leaves empty ("No specific versions mentioned") are regenerated.
+  - **Filler repair:** sections the model leaves empty ("No specific versions mentioned"), skips or copies from another item are regenerated from their own passages.
+  - **Very long lists:** items that don't fit in the context are named in a closing note, so the answer doesn't look complete when it isn't.
   - **Loop detection:** answers that start repeating are stopped.
 - **Real-world documents:** PDF headings recovered from font size and weight; running headers and footers removed; heading-aware Markdown chunks; encoding, BOM, front-matter and other file quirks handled.
-- **Reproducible benchmarks:** one command per document set reruns the list benchmark with identical answers (fixed seed, temperature 0, no cached prompts). There are 154 tests, and they run on GitHub Actions without Ollama.
+- **Reproducible benchmarks:** one command per document set reruns the list benchmark with identical answers (fixed seed, temperature 0, no cached prompts). There are 165 tests, and they run on GitHub Actions without Ollama.
 
 ## Results at a glance
 
@@ -30,6 +31,7 @@ Every design decision is backed by a measurement, usually on question sets writt
 | Passage retrieval, 20 held-out questions on private docs (hit@4) | vector 70% → **hybrid 100%** |
 | Passage retrieval, 30 blind questions on third-party docs (hit@4) | vector 80% → **hybrid 87%** |
 | Retrieved coverage of list items, 29 list questions over 4 document sets | 68% → **97%** with list expansion |
+| Whole-changelog lists (35–48 releases) | retrieved coverage over 41 list questions 87% → **96%**; 3 changelogs answered at **100%** coverage, with details for every release that fits and the rest named in a note |
 | List answers, reproducible benchmark (12 public questions, 7 held out) | **12 of 12 at 100%** coverage (one was at 67% until a chooser fix) |
 | End-to-end answers on documents never tuned on (13 answerable, 3 unanswerable) | 11 correct with citations, **0 made up**, 3 of 3 refused |
 | Citation checker on answers not used to build it | **22 of 24** flags are real errors |
@@ -41,8 +43,8 @@ Everything runs on a Ryzen 7 4750U laptop with 16 GB RAM and no GPU.
 ## Known limits
 
 - **Speed:** qwen2.5:7b writes about 3–4 tokens/s on a laptop CPU. A long list answer takes 3–5 minutes, and repairing a 45-item list with filler adds about 15.
-- **Very long lists don't fit:** for a changelog with 48 releases, only 17–33% of the releases fit in the context budget for retrieved passages.
-- **The list chooser sometimes can't decide:** in 2 of 16 unseen list questions it keeps both candidate lists, so the answer can include unrelated sections.
+- **Very long lists only get details for what fits:** about 30 releases fit in the context budget for retrieved passages. The rest are named in a closing note from the document's headings, without details.
+- **The list chooser sometimes can't decide:** in 2 of 16 unseen list questions it keeps both candidate lists, so the answer can include unrelated sections. On whole-changelog questions it stays undecided on 5 of 12 phrasings, all nested lists (the changelog and one release's sub-list). Then the closing note and the repair of skipped sections don't run.
 - **The citation checker uses word overlap, not meaning:** a sentence that reuses a passage's words but reverses its meaning would pass.
 - **Items written inside a section's text,** such as FAQ questions as bold lines, benefit less from list handling than items that are headings.
 - **Small question sets:** 12–30 questions per benchmark, hand-graded where it matters. Treat the numbers as evidence, not guarantees.
@@ -184,7 +186,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 154 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 165 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 GitHub Actions runs them on Linux (Python 3.10 and 3.12) and Windows (3.12), plus `ruff`, on every push.
@@ -194,7 +196,7 @@ GitHub Actions runs them on Linux (Python 3.10 and 3.12) and Windows (3.12), plu
 - [x] Hybrid search (BM25 + vectors) and compare against pure vector search
 - [x] Citation checking, filler repair and loop detection for long answers
 - [x] Reproducible end-to-end benchmark for list answers
-- [ ] Very long lists: list every item name from the document outline, with details for as many as fit
+- [x] Very long lists: list every item name from the document outline, with details for as many as fit
 - [ ] Treat items written inside a section's text (FAQ-style bold lines) as list items
 - [ ] Measure run-to-run spread at the app's real temperature (`--temperature 0.1 --seed none --runs 3`)
 - [ ] Cross-encoder re-ranking of the top-k passages

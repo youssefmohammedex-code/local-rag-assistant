@@ -20,6 +20,7 @@ How each part of the [Local RAG Assistant](../README.md) was measured, what fail
   - [The list chooser answered by position: a heading-name fallback](#the-list-chooser-answered-by-position-a-heading-name-fallback)
   - [Model comparison: `llama3.2:3b` vs `qwen2.5:7b`](#model-comparison-llama323b-vs-qwen257b)
   - [Stopping repetition loops](#stopping-repetition-loops)
+  - [Very long lists: whole changelogs](#very-long-lists-whole-changelogs)
 
 ## Retrieval evaluation harness
 
@@ -466,3 +467,35 @@ Answers are capped at 3,000 tokens (see "Reliability" in the README), but at ~3 
 - **The margin, honestly:**
   - **Why 3 copies:** with 2 copies in a row, it would also cut two normal answers whose example code has a similar block twice.
   - **What gets lost:** one stopped answer (a single line repeated about 48 times) had later recovered and listed the releases. Stopping loses that part, a trade-off for never showing a long loop.
+
+### Very long lists: whole changelogs
+
+**The problem:** "List every release" over a changelog with 35–48 releases. The context budget for passages (20,000 characters) holds about 30 releases, and two things went wrong:
+- **Retrieval picked sub-lists:** for pydantic, two releases' "What's Changed" lists (New Features, Fixes, …) ranked above the changelog itself, so only 17–33% of the releases reached the model.
+- **The model skipped what it was given:** charset-normalizer had 35 releases with passages; the answer wrote 11 and skipped all 24 of the 3.x releases at the top (57% coverage).
+
+**The changes:**
+- **A list the hits spread across:** when one candidate list has hits in at least 4 of its sub-sections and one of the two picked lists sits inside it, it replaces the second pick. Unrelated lists are never swapped in (the first version of this rule did that in 4 questions, including python-dotenv's use cases, and was narrowed).
+- **A closing note:** items of the answered list that had no passages in the context are named from the document's headings under "Also in this list, without details", so the answer says what it left out instead of looking complete.
+- **Skipped sections are written afterwards,** from their own passages, and inserted in document order. This only runs when the answer clearly follows the list: at least 3 headings, and most of them, must be exact item names. A looser check matched orjson's FAQ answer (one heading, "Questions") and Typer's example steps.
+- **Copied sections are repaired:** in pydantic's answer the model copied one release's three bullets, citation and all, under 13 other releases that had passages of their own. A section whose body is word for word another section's body is now regenerated like filler. The citation checker also missed those bullets, because they were written "- [22] Text" with the citation first; it now reads that form.
+- **Filler detection** also catches placeholder bullets like "- [Not applicable for this version]".
+
+None of these rules changes any of the 12 suite answers: the spread rule leaves their retrieval unchanged, and the repair rules don't fire on any saved answer except the long-list ones.
+
+| Check | Before | After |
+|---|---|---|
+| Retrieved coverage, 41 list questions over 4 document sets | 87.2% | **95.7%** (6 better, 0 worse; thresholds 3–5 give the same result) |
+| charset-normalizer, "List every release" (35 of 46 releases fit) | 57% | **100%** of headings; the 24 skipped 3.x releases were written and each checked against the document; the 11 that didn't fit are named in the note; 49 of 57 citations check out (the 8 that don't are in sections the model wrote in its first pass) |
+| httpcore (PDF), "What are all the versions" | 85% retrieved | **100%**, 0 filler, **88 of 88** citations check out |
+| pydantic, "What are all the versions" | 17% retrieved | **100%**, 0 filler, **47 of 55** citations check out; the 13 copied sections now each have their own release's changes; the 17 releases that didn't fit are named in the note |
+
+All answers are cold and seeded (`--cold`, seed 42, temperature 0); the before numbers come from the same questions on the earlier code. Results are in `eval/results/long_lists_{gen,pdf,pyd}.md`. The pydantic row in `long_lists_gen` is the answer with the copied sections, before that repair; `long_lists_pyd` is the rerun after it.
+
+**Still imperfect in the pydantic answer:** the chooser picked the README's top-level list, which in that file holds both the README sections and the releases. So the answer also has 8 headings such as "Installation" and "Help", and the note names a "New Contributors" sub-heading as if it were a release. Nothing is made up, but a person would have left those out.
+
+**Tried and reverted:**
+- **A yes/no question per list,** for when the chooser can't decide: in every undecided case the model said yes to both lists or no to both, so it never decided anything.
+- **Completing the outer list** when the two candidates are nested (the whole changelog and one release's "Added / Fixed"): right for "every release in the changelog", wrong for questions like Typer's "each part of the example upgrade", where the inner list is the answer. The document's structure can't tell these apart; only the question's wording can.
+
+**The limit that remains:** across 12 phrasings of whole-changelog questions, the chooser decided 7 (all correctly) and stayed undecided on 5, all of them nested lists. When it's undecided, both lists are kept, and filler repair still runs, but the note and the skipped-section repair don't, because it isn't clear which list the answer should complete. The three questions above are phrasings the chooser decides, one per changelog.
