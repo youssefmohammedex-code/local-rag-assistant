@@ -7,7 +7,9 @@ Everything runs on a laptop CPU: local embeddings and a local LLM through [Ollam
 
 Every design decision is backed by a measurement, usually on question sets written before the code was tuned and on documents it was never tuned on. The full story, including what didn't work, is in **[docs/EVALUATION.md](docs/EVALUATION.md)**.
 
-<!-- TODO: add a demo GIF here, e.g. docs/demo.gif -->
+![DocChat answering "What changed in httpcore 1.0.0?" from a PDF, with citations, a passing citation check and the cited source passage](docs/demo.gif)
+
+*A question answered from httpcore's PDF documentation: every claim cites a passage, the citation check passes, and the cited passage is highlighted in Sources. The generation part is sped up; the real answer took 95 s on a laptop CPU.*
 
 ## Highlights
 
