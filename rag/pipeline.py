@@ -107,13 +107,30 @@ def _nested(a: tuple, b: tuple) -> bool:
     return _is_ancestor(a, b) or _is_ancestor(b, a)
 
 
+def list_heading(source: str, parent: str, kids: list) -> str:
+    """The heading a candidate list is named by: its section path, or the file for a top-level list."""
+    return parent or pretty_source(source)
+
+
 def describe_list(source: str, parent: str, kids: list) -> str:
     """A section summarized as its full heading path plus its sub-headings, e.g.
     "orjson > Types: dataclass; datetime; enum; ...". The full path matters: with only the last
     heading, the whole-document summary was the only one containing the product name, so any
     question naming the product ("all the types orjson can serialize") picked the whole document."""
-    path = parent or pretty_source(source)
-    return f"{path}: " + "; ".join(name for name, _ in kids[:MAX_NODE_CHILDREN])
+    return f"{list_heading(source, parent, kids)}: " + "; ".join(name for name, _ in kids[:MAX_NODE_CHILDREN])
+
+
+def heading_matches(reply: str, headings: list[str]) -> int | None:
+    """Which heading a reply names: the one it equals in full, else the one whose last part it
+    equals ("Other Use Cases" for "python-dotenv > Other Use Cases"). None if not exactly one."""
+    def norm(text: str) -> str:
+        return " ".join(re.sub(r"[^\w]+", " ", text.lower()).split())
+    said = norm(reply.strip().strip("\"'`*.").split("\n")[0])
+    for parts in (lambda h: h, lambda h: h.split(" > ")[-1]):
+        found = [i for i, h in enumerate(headings) if norm(parts(h)) == said]
+        if len(found) == 1:
+            return found[0]
+    return None
 
 
 CITATION_RULE ='After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
@@ -177,6 +194,14 @@ def choose_list_prompt(question: str, lists: list) -> str:
     options = "\n".join(f"{letter}: {describe_list(*lst)}" for letter, lst in zip("AB", lists, strict=True))
     return (f"Question: {question}\n\nTwo lists of sections from the documents:\n{options}\n\n"
             "Which list's sections does the question ask about? Answer with the single letter A or B.")
+
+
+def choose_heading_prompt(question: str, lists: list) -> str:
+    """The same choice, answered with the list's heading instead of a letter (see choose_list)."""
+    options = "\n".join(f"- {describe_list(*lst)}" for lst in lists)
+    return (f"Question: {question}\n\nTwo lists of sections from the documents, each written as "
+            f"'heading: its sections':\n{options}\n\nWhich list's sections does the question ask about? "
+            "Answer with that list's heading only, exactly as written before the colon.")
 
 
 REPAIR_QUESTION = "What does each of these sections of the documents say?"
@@ -389,24 +414,34 @@ class RAGPipeline:
         the sections of the guide"). Before answering, ask the model which one the question means:
         a one-letter multiple choice that a 7B model gets right far more reliably than it ignores
         40 irrelevant passages. Asked in both orders, because the model leans towards one letter
-        when unsure: a pick counts only if both orders agree. None (keep both lists, as before)
-        when there is nothing to choose, the orders disagree, or a reply is not A/B."""
+        when unsure: a pick counts only if both orders agree.
+
+        When the letters disagree, the model was answering by position ("B" both times, for Typer's
+        example upgrade and python-dotenv's use cases), so it is asked once more per order to name the
+        list's heading instead, which it can't do by position. Only these abstentions reach the second
+        question, so every pick the letters already agree on is unchanged. None (keep both lists, as
+        before) when there is nothing to choose or neither question gets the same answer in both orders."""
         lists = self._list_plans.get(question, [])
         if len(lists) != 2:
             return None
-        picks = []
-        for order in ([0, 1], [1, 0]):
-            request = {
-                "model": self.settings.llm_model,
-                "messages": [{"role": "user", "content": choose_list_prompt(question, [lists[i] for i in order])}],
-                "options": self._options(temperature=0, num_predict=4),
-            }
-            reply = "".join(self._stream_call(request)).strip().upper()
-            match = re.match(r"\W*([AB])\b", reply)
-            if not match:
-                return None
-            picks.append(order["AB".index(match.group(1))])
-        return picks[0] if picks[0] == picks[1] else None
+        letters = [self._ask_choice(question, lists, order, by_heading=False) for order in ([0, 1], [1, 0])]
+        if letters[0] is not None and letters[0] == letters[1]:
+            return letters[0]
+        headings = [self._ask_choice(question, lists, order, by_heading=True) for order in ([0, 1], [1, 0])]
+        return headings[0] if headings[0] is not None and headings[0] == headings[1] else None
+
+    def _ask_choice(self, question: str, lists: list, order: list[int], by_heading: bool) -> int | None:
+        """One chooser question with the lists in `order`; the index of the list picked, or None."""
+        shown = [lists[i] for i in order]
+        prompt = choose_heading_prompt(question, shown) if by_heading else choose_list_prompt(question, shown)
+        request = {"model": self.settings.llm_model, "messages": [{"role": "user", "content": prompt}],
+                   "options": self._options(temperature=0, num_predict=24 if by_heading else 4)}
+        reply = "".join(self._stream_call(request)).strip()
+        if not by_heading:
+            match = re.match(r"\W*([AB])\b", reply.upper())
+            return order["AB".index(match.group(1))] if match else None
+        picked = heading_matches(reply, [list_heading(*lst) for lst in shown])
+        return order[picked] if picked is not None else None
 
     def generate(self, question: str, hits: list[Hit], mode: str | None = None) -> str:
         """The full answer, with filler sections of a list answer regenerated (repair_filler).

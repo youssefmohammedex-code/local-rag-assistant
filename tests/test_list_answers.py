@@ -17,7 +17,7 @@ class FakeLLM:
 
     def chat(self, model, messages, options, stream=False):
         prompt = messages[-1]["content"]
-        if "single letter A or B" in prompt:
+        if "single letter A or B" in prompt or "exactly as written before the colon" in prompt:
             self.choices.append(prompt)
             yield {"message": {"content": self.chooser(prompt)}, "done": True, "eval_count": 1, "eval_duration": 1e8}
             return
@@ -136,6 +136,38 @@ def test_seed_is_sent_only_when_set(pipeline):
     pipeline.settings = dataclasses.replace(pipeline.settings, seed=7, temperature=0)
     options = pipeline._request("q", [], "detailed")["options"]
     assert options["seed"] == 7 and options["temperature"] == 0 and options["num_ctx"] == pipeline.settings.num_ctx
+
+
+def test_heading_question_decides_when_the_letters_follow_position(pipeline):
+    """Typer's example upgrade: the model answered "B" in both orders, i.e. by position."""
+    question, hits = _setup(pipeline, "checklist")
+    lists = pipeline._list_plans[question]
+    wanted = next(lst for lst in lists if lst[1].endswith("Modules"))
+
+    def chooser(prompt):
+        return "B" if "single letter" in prompt else "Modules"  # the last part of the wanted heading
+
+    pipeline._llm = FakeLLM(chooser=chooser)
+    pipeline.generate(question, hits)
+    assert len(pipeline._llm.choices) == 4  # two letter questions, then two heading questions
+    assert pipeline.choose_list(question) == lists.index(wanted)
+
+
+def test_letters_that_agree_are_never_second_guessed(pipeline):
+    question, hits = _setup(pipeline, "checklist")
+    pipeline._llm = FakeLLM(chooser=lambda p: _letter_of(p, "Modules:") if "single letter" in p else "Guide")
+    pipeline.generate(question, hits)
+    assert len(pipeline._llm.choices) == 2
+
+
+def test_heading_matches():
+    from rag.pipeline import heading_matches
+    headings = ["python-dotenv > Other Use Cases", "python-dotenv"]
+    assert heading_matches("Other Use Cases", headings) == 0
+    assert heading_matches("'python-dotenv'.", headings) == 1
+    assert heading_matches("python-dotenv > Other Use Cases", headings) == 0
+    assert heading_matches("Serialize", ["orjson > Usage > Serialize > option", "orjson > Usage"]) is None
+    assert heading_matches("A", headings) is None
 
 
 def test_cold_calls_unload_the_model_after_every_call(pipeline):
