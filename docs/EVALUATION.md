@@ -21,6 +21,7 @@ How each part of the [Local RAG Assistant](../README.md) was measured, what fail
   - [Model comparison: `llama3.2:3b` vs `qwen2.5:7b`](#model-comparison-llama323b-vs-qwen257b)
   - [Stopping repetition loops](#stopping-repetition-loops)
   - [Very long lists: whole changelogs](#very-long-lists-whole-changelogs)
+  - [How-to answers with code left most sentences uncited](#how-to-answers-with-code-left-most-sentences-uncited)
 
 ## Retrieval evaluation harness
 
@@ -499,3 +500,27 @@ All answers are cold and seeded (`--cold`, seed 42, temperature 0); the before n
 - **Completing the outer list** when the two candidates are nested (the whole changelog and one release's "Added / Fixed"): right for "every release in the changelog", wrong for questions like Typer's "each part of the example upgrade", where the inner list is the answer. The document's structure can't tell these apart; only the question's wording can.
 
 **The limit that remains:** across 12 phrasings of whole-changelog questions, the chooser decided 7 (all correctly) and stayed undecided on 5, all of them nested lists. When it's undecided, both lists are kept, and filler repair still runs, but the note and the skipped-section repair don't, because it isn't clear which list the answer should complete. The three questions above are phrasings the chooser decides, one per changelog.
+
+### How-to answers with code left most sentences uncited
+
+**Found while recording the README demo:** "How do I load variables from a .env file with python-dotenv?" got a correct, well-structured answer with code, and 0 of 10 passages cited. The benchmarks had no how-to questions, so this was never measured.
+
+**Measured** on 12 how-to questions over the demo library (python-dotenv, Typer, orjson, httpcore): 6 to find the cause, 6 held out to test the fix, plus 3 factual questions as controls. One seeded answer each, counting the sentences outside code that carry a citation.
+
+**Why it happened:**
+- **Citations moved off the text:** the model put a step's citation on its own line after the code block ("[6]"), or as a footer ("Passage id: [9]"). The step itself was left uncited, so the citation checker had nothing to check.
+- **No citations at all** in some answers. The citation rule's only example was a short fact ("a GPA of 3.0 [2]"), not a step or a code example.
+
+**The fix:**
+- **The citation rule now says** steps and code examples are facts too, and that citations go inside the sentences, not in a list at the end.
+- **That made the model cite inside the code** ("pip install python-dotenv [1]", "load_dotenv()  # ... [6]"), which breaks code a user copies. So after the answer is written, citations at the end of a code line, and citation lines right after a block, are moved to the last sentence before the block (`move_code_citations`). Only real passage ids move, and only after a word or comment, never after "=", "(" or ",", so code such as `x = [1]` is untouched. Replayed on every saved answer, it changed only the how-to answers.
+
+| How-to answers | Sentences with a citation |
+|---|---|
+| 6 questions used to find the cause | 11% (8 of 73) → **41%** (23 of 56) |
+| **6 held-out questions** | 15% (8 of 53) → **37%** (17 of 46); citations that check out 3 → 8 |
+
+**Honest limits:**
+- **Most how-to sentences are still uncited.** Adding citations automatically by word overlap was not done: it would attribute sentences the model never attributed.
+- **One control answer got worse:** for "Which Python versions does orjson support?" the new answer invented "Python 3.95" (it mixed in Rust 1.95). The citation checker flagged all three of its claims. With one sample per question, it can't be told apart from run-to-run variation.
+- **The rule is in every prompt,** so the list benchmark answers saved before this change no longer match the current code exactly.

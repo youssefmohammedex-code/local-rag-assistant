@@ -24,7 +24,7 @@ Every design decision is backed by a measurement, usually on question sets writt
   - **Very long lists:** items that don't fit in the context are named in a closing note, so the answer doesn't look complete when it isn't.
   - **Loop detection:** answers that start repeating are stopped.
 - **Real-world documents:** PDF headings recovered from font size and weight; running headers and footers removed; heading-aware Markdown chunks; encoding, BOM, front-matter and other file quirks handled.
-- **Reproducible benchmarks:** one command per document set reruns the list benchmark with identical answers (fixed seed, temperature 0, no cached prompts). There are 165 tests, and they run on GitHub Actions without Ollama.
+- **Reproducible benchmarks:** one command per document set reruns the list benchmark with identical answers (fixed seed, temperature 0, no cached prompts). There are 167 tests, and they run on GitHub Actions without Ollama.
 
 ## Results at a glance
 
@@ -47,6 +47,7 @@ Everything runs on a Ryzen 7 4750U laptop with 16 GB RAM and no GPU.
 - **Speed:** qwen2.5:7b writes about 3–4 tokens/s on a laptop CPU. A long list answer takes 3–5 minutes, and repairing a 45-item list with filler adds about 15.
 - **Very long lists only get details for what fits:** about 30 releases fit in the context budget for retrieved passages. The rest are named in a closing note from the document's headings, without details.
 - **The list chooser sometimes can't decide:** in 2 of 16 unseen list questions it keeps both candidate lists, so the answer can include unrelated sections. On whole-changelog questions it stays undecided on 5 of 12 phrasings, all nested lists (the changelog and one release's sub-list). Then the closing note and the repair of skipped sections don't run.
+- **How-to answers with code cite less:** on held-out how-to questions, 37% of sentences carry a citation (up from 15%), against about 60% for factual questions. Citations the model writes inside code are moved out so copied code still runs.
 - **The citation checker uses word overlap, not meaning:** a sentence that reuses a passage's words but reverses its meaning would pass.
 - **Items written inside a section's text,** such as FAQ questions as bold lines, benefit less from list handling than items that are headings.
 - **Small question sets:** 12–30 questions per benchmark, hand-graded where it matters. Treat the numbers as evidence, not guarantees.
@@ -188,7 +189,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 165 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 167 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 GitHub Actions runs them on Linux (Python 3.10 and 3.12) and Windows (3.12), plus `ruff`, on every push.
