@@ -89,6 +89,9 @@ def claims(answer: str) -> list[tuple[str, list[int], str | None]]:
             heading = _CITATION.sub("", match.group(1)).strip(" *")
             continue
         line = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line)  # bullet or list number
+        lead = re.match(r"^((?:\[\d+(?:\s*,\s*\d+)*\]\s*)+)(.*)$", line)
+        if lead and lead.group(2).strip() and not _CITATION.search(lead.group(2)):
+            line = f"{lead.group(2).strip()} {lead.group(1).strip()}"  # "- [22] Text": cited first
         start = 0
         for match in _CITATION.finditer(line):
             text = line[start:match.start()]

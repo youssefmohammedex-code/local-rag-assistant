@@ -14,7 +14,7 @@ from rag.chunking import chunk_pages
 from rag.citations import CitationCheck, check_citations, same_heading, segments
 from rag.config import Settings
 from rag.errors import NoDocumentsError
-from rag.filler import filler_headings, insert_sections, is_filler, splice
+from rag.filler import duplicate_headings, filler_headings, insert_sections, is_filler, splice
 from rag.filler import sections as answer_sections
 from rag.loaders import load_documents, pretty_source
 from rag.loops import LoopDetector
@@ -592,7 +592,8 @@ class RAGPipeline:
         and skipped all 24 of the 3.x releases at the top. They are inserted in document order."""
         items = self.list_items(question, hits)
         todo: list[tuple[str | None, ListItem]] = []  # (heading in the answer, or None if skipped)
-        for heading in filler_headings(answer):
+        filler = filler_headings(answer)
+        for heading in filler + [h for h in duplicate_headings(answer) if h not in filler]:
             item = next((i for i in items if same_heading(i.name, heading)), None)
             if item and all(item is not other for _, other in todo):
                 todo.append((heading, item))

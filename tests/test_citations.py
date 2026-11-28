@@ -19,6 +19,12 @@ def test_claims_split_sentences_and_keep_every_cited_id():
                               ("See both", [1, 2], "Setup")]
 
 
+def test_a_citation_written_before_the_bullet_text_covers_it():
+    # pydantic long list: "- [22] Latest V1.10.26 release" under 13 releases went unchecked.
+    assert claims("### v2.14.4\n- [22] Latest V1.10.26 release.\n- [5] Supports Python 3.14.") == \
+        [("Latest V1.10.26 release.", [22], "v2.14.4"), ("Supports Python 3.14.", [5], "v2.14.4")]
+
+
 def test_supported_miscited_and_unsupported():
     assert _status("The package depends on h11 and certifi [1].") == [("supported", None)]
     assert _status("Optional extras add HTTP/2 and SOCKS support [1].") == [("miscited", 2)]

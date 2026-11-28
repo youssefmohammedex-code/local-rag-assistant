@@ -42,6 +42,18 @@ def filler_headings(answer: str) -> list[str]:
     return [heading for heading, start, end in sections(answer) if is_filler(answer[start:end])]
 
 
+def duplicate_headings(answer: str) -> list[str]:
+    """Sections whose body is word for word another section's body. Different list items don't
+    share every sentence and citation, so at most one of them is right: qwen copied v2.14.0's three
+    bullets, citation and all, under 13 other pydantic releases that had passages of their own."""
+    seen: dict[str, list[str]] = {}
+    for heading, start, end in sections(answer):
+        body = " ".join(answer[start:end].split())
+        if body:
+            seen.setdefault(body, []).append(heading)
+    return [h for headings in seen.values() if len(headings) > 1 for h in headings]
+
+
 def insert_sections(answer: str, new: list[tuple[str, str]], order: list[str], same, before: str | None = None) -> str:
     """Add sections ("### name" + body) in document order: each goes before the first existing
     section that comes later in `order`, else before the `before` heading (a closing note), else at

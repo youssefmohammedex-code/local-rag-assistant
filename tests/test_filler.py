@@ -109,6 +109,23 @@ def test_a_passage_id_written_as_heading_still_maps_to_its_section(pipeline):
     assert repaired == 1 and f"- Real content from this passage [{item.passages[0]}]." in fixed
 
 
+def test_duplicate_headings():
+    from rag.filler import duplicate_headings
+    copied = "- [22] Latest V1.10.26 release.\n- [22] Supports Python 3.14.\n"
+    answer = f"### v2.14.4\n{copied}\n### v2.14.3\n{copied}\n### v2.14.0\n- [5] Supports Python 3.14.\n"
+    assert duplicate_headings(answer) == ["v2.14.4", "v2.14.3"]
+    assert duplicate_headings("### a\n- One [1].\n\n### b\n- Two [2].\n") == []
+
+
+def test_repair_rewrites_sections_copied_under_other_items(pipeline):
+    question, hits = _list_setup(pipeline)
+    names = [i.name for i in pipeline.list_items(question, hits) if i.name.startswith("Module")][:3]
+    answer = "\n\n".join(f"### {n}\n- Module A owns component A [1]." for n in names)
+    pipeline._llm = SummarizingLLM()
+    fixed, repaired = pipeline.repair_filler(question, hits, answer)
+    assert repaired == 3 and all(f"- {n} owns its component" in fixed for n in names)
+
+
 def test_answers_without_filler_cost_no_call(pipeline):
     question, hits = _list_setup(pipeline)
     pipeline._llm = SummarizingLLM()
