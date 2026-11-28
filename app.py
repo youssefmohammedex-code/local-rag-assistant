@@ -303,6 +303,7 @@ if question:
                     placeholder.markdown(with_citation_badges(text), unsafe_allow_html=True)
                     with st.spinner(f"Filling in {n_filler} section(s) the model left empty…"):
                         text, n_repaired = pipeline.repair_filler(question, hits, text)
+                text = citations.move_code_citations(text, len(hits))  # keep copied code runnable
                 placeholder.empty()
                 stats = pipeline.last_stats
                 meta = (f"{html.escape(model)} · {len(hits)} passages · {stats.tokens} tokens · "

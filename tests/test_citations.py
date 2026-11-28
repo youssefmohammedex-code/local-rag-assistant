@@ -25,6 +25,32 @@ def test_a_citation_written_before_the_bullet_text_covers_it():
         [("Latest V1.10.26 release.", [22], "v2.14.4"), ("Supports Python 3.14.", [5], "v2.14.4")]
 
 
+def test_citations_inside_code_move_to_the_sentence_before_the_block():
+    from rag.citations import move_code_citations
+    answer = ("1. **Install**: install it with pip.\n   ```shell\n   pip install python-dotenv [1]\n   ```\n"
+              "2. **Load**: call `load_dotenv`:\n   ```python\n   load_dotenv()  # sets os.environ [6]\n"
+              "   print(os.environ['A'])  # example [6]\n   ```")
+    assert move_code_citations(answer, 10) == (
+        "1. **Install**: install it with pip. [1]\n   ```shell\n   pip install python-dotenv\n   ```\n"
+        "2. **Load**: call `load_dotenv` [6]:\n   ```python\n   load_dotenv()  # sets os.environ\n"
+        "   print(os.environ['A'])  # example\n   ```")
+
+
+def test_a_citation_line_after_a_block_moves_up_and_real_code_is_untouched():
+    from rag.citations import move_code_citations
+    after = "Read the values:\n```python\nconfig = dotenv_values()\n```\n\n   [5]\n\nNext step."
+    assert move_code_citations(after, 10) == "Read the values [5]:\n```python\nconfig = dotenv_values()\n```\n\n\nNext step."
+    several = "Use OPT_SORT_KEYS to sort the keys:\n```python\norjson.dumps(d)\n```\n\n[1] [4] [6]"
+    assert move_code_citations(several, 10) == "Use OPT_SORT_KEYS to sort the keys [1, 4, 6]:\n```python\norjson.dumps(d)\n```\n"
+    # A bare "Example:" line is too short to check, so the step it belongs to gets the citation.
+    step = "- `load_dotenv()` adds each key to os.environ.\n\n   Example:\n   ```python\n   load_dotenv()\n   ```\n   [6]"
+    assert move_code_citations(step, 10).startswith("- `load_dotenv()` adds each key to os.environ. [6]\n\n   Example:\n")
+    for code in ["Make a list:\n```python\nx = [1]\nf(a, [2])\n```",  # code, not citations
+                 "```python\nprint(x)  # [3]\n```",  # no sentence before the block: left as written
+                 "Run it:\n```shell\ncmd [42]\n```"]:  # not a passage id
+        assert move_code_citations(code, 10) == code
+
+
 def test_supported_miscited_and_unsupported():
     assert _status("The package depends on h11 and certifi [1].") == [("supported", None)]
     assert _status("Optional extras add HTTP/2 and SOCKS support [1].") == [("miscited", 2)]

@@ -105,6 +105,73 @@ def claims(answer: str) -> list[tuple[str, list[int], str | None]]:
     return found
 
 
+_FENCE = re.compile(r"^\s*(```|~~~)")
+# A citation ending a code line: after a word or a comment, never after "=", "(", "," etc., so
+# real code such as `x = [1]` is left alone.
+_CODE_CITATION = re.compile(r"(?<=[^\s=(\[,:{+\-*/<>|&])\s+\[(\d+(?:\s*,\s*\d+)*)\]\s*$")
+_LONE_CITATION = re.compile(r"^\s*((?:\[\d+(?:\s*,\s*\d+)*\]\s*)+)$")  # "[6]" or "[1] [4] [6]"
+
+
+def move_code_citations(answer: str, n_passages: int) -> str:
+    """Move citations out of code blocks to the sentence that introduces the block.
+
+    Told that code examples need citations too, qwen2.5:7b wrote them inside the code
+    ("pip install python-dotenv [1]", "load_dotenv()  # ... [6]"), which breaks code a user copies.
+    Without that instruction it put them on a line of their own after the block. Both are moved to
+    the last line of text before the block, where the citation checker can also check them. Only ids
+    of real passages are moved, and only when the block has a line of text before it."""
+    lines, out = answer.split("\n"), []
+    intro = None  # index in `out` of the last text line outside code
+    in_code, pending, block_intro, after_code = False, [], None, None
+
+    def attach(index: int | None, ids: list[int]) -> bool:
+        if index is None:
+            return False
+        line = out[index]
+        new = [i for i in dict.fromkeys(ids) if f"[{i}]" not in line]
+        if new:
+            tag = f" [{', '.join(map(str, new))}]"
+            out[index] = line.rstrip()[:-1] + tag + ":" if line.rstrip().endswith(":") else line.rstrip() + tag
+        return True
+
+    def ids_of(text: str) -> list[int] | None:
+        ids = [int(n) for n in re.findall(r"\d+", text)]
+        return ids if ids and all(1 <= i <= n_passages for i in ids) else None
+
+    for line in lines:
+        if _FENCE.match(line):
+            if not in_code:
+                in_code, pending, block_intro, original = True, [], intro, []
+            else:
+                in_code = False
+                if pending and not attach(block_intro, pending):
+                    out[-len(original):] = original  # nowhere to move them: keep the block as written
+                after_code = block_intro
+            out.append(line)
+            if in_code:
+                original = [line]
+            continue
+        if in_code:
+            original.append(line)
+            match = _CODE_CITATION.search(line)
+            ids = ids_of(match.group(1)) if match else None
+            if ids and block_intro is not None:
+                pending += ids
+                line = line[:match.start()]
+            out.append(line)
+            continue
+        lone = _LONE_CITATION.match(line)
+        if lone and after_code is not None and (ids := ids_of(lone.group(1))):
+            attach(after_code, ids)
+            continue
+        if line.strip():
+            after_code = None
+            if len(re.findall(r"[A-Za-z]+", _CITATION.sub("", line))) >= 3:  # a sentence, not "Example:"
+                intro = len(out)
+        out.append(line)
+    return "\n".join(out)
+
+
 def overlap(claim_words: set[str], passage_words: set[str]) -> float:
     """Share of the claim's words in the passage; below the support threshold if any number or
     code in the claim is missing from the passage."""

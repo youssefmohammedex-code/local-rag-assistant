@@ -11,7 +11,7 @@ import ollama
 
 from rag.bm25 import identifiers
 from rag.chunking import chunk_pages
-from rag.citations import CitationCheck, check_citations, same_heading, segments
+from rag.citations import CitationCheck, check_citations, move_code_citations, same_heading, segments
 from rag.config import Settings
 from rag.errors import NoDocumentsError
 from rag.filler import duplicate_headings, filler_headings, insert_sections, is_filler, splice
@@ -170,7 +170,9 @@ def heading_matches(reply: str, headings: list[str]) -> int | None:
     return None
 
 
-CITATION_RULE ='After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]."'
+CITATION_RULE = ('After each fact, put the passage id in brackets, for example: "... a GPA of 3.0 [2]." '
+                 "Steps and code examples are facts too: end the sentence that introduces each one with the "
+                 "id of the passage it comes from. Cite inside the sentences, not in a list at the end.")
 
 
 def build_prompt(question: str, hits: list[Hit], mode: str = "detailed", ids: list[int] | None = None,
@@ -505,7 +507,7 @@ class RAGPipeline:
         """The full answer, with filler sections of a list answer regenerated (repair_filler).
         Streaming callers (app, CLI) call repair_filler themselves after the stream ends."""
         answer = "".join(self.stream(question, hits, mode)).strip()
-        return self.repair_filler(question, hits, answer)[0]
+        return move_code_citations(self.repair_filler(question, hits, answer)[0], len(hits))
 
     def _stream_call(self, request: dict) -> Iterator[str]:
         """Stream one model call. Stops early, with a note, if the model starts repeating itself

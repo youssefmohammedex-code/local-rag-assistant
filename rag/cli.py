@@ -51,7 +51,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
         # The streamed answer had sections with nothing but filler; print the regenerated version.
         print(f"\n\n--- {repaired} section(s) had only filler; regenerated answer ---\n\n{fixed}", end="")
         answer = fixed
-    checks = pipeline.check_citations(answer, hits)
+    checks = pipeline.check_citations(citations.move_code_citations(answer, len(hits)), hits)
     if checks:
         print(f"\n\nCitation check: {citations.summary(checks)}")
         for line in citations.issues(checks):
