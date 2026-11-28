@@ -21,7 +21,7 @@ Every design decision is backed by a measurement, usually on question sets writt
   - **Filler repair:** sections the model leaves empty ("No specific versions mentioned") are regenerated.
   - **Loop detection:** answers that start repeating are stopped.
 - **Real-world documents:** PDF headings recovered from font size and weight; running headers and footers removed; heading-aware Markdown chunks; encoding, BOM, front-matter and other file quirks handled.
-- **Reproducible benchmarks:** one command per document set reruns the list benchmark with identical answers (fixed seed, temperature 0, no cached prompts). There are 151 tests, and they run on GitHub Actions without Ollama.
+- **Reproducible benchmarks:** one command per document set reruns the list benchmark with identical answers (fixed seed, temperature 0, no cached prompts). There are 154 tests, and they run on GitHub Actions without Ollama.
 
 ## Results at a glance
 
@@ -184,7 +184,7 @@ tests/           unit tests (pytest, no Ollama needed)
 ## Tests
 
 ```bash
-pytest          # 151 tests, no Ollama needed (a fake embedder stands in for it)
+pytest          # 154 tests, no Ollama needed (a fake embedder stands in for it)
 ```
 
 GitHub Actions runs them on Linux (Python 3.10 and 3.12) and Windows (3.12), plus `ruff`, on every push.
