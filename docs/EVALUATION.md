@@ -413,7 +413,7 @@ python -m eval.list_answers --cold --docs data/docs/sample --db data/chroma_eval
 **Baseline (seed 42, temperature 0):** 12 public list questions, 5 used in design and 7 held out.
 - **First run:** 11 were at 100%. Typer's "walk me through each part of the example upgrade" was at 67%, so the mean was 97.2%. This corrected the list-chooser results above, where that question showed 100% in one run, flagged there as possibly run-to-run variance.
 - **After fixing the chooser's position bias (next section):** **all 12 at 100%**.
-- **Citations:** 124 of 135 cited sentences pass the citation check.
+- **Citations:** 124 of 135 cited sentences pass the citation check. After the how-to citation change, the rerun gives 133 of 154; see [the how-to section](#how-to-answers-with-code-left-most-sentences-uncited).
 - **Filler:** no answer has any left.
 - **Time:** about 45 minutes.
 - **Per-question tables:** `eval/results/list_answers_{gen,pdf,sample}.md`.
@@ -523,4 +523,10 @@ All answers are cold and seeded (`--cold`, seed 42, temperature 0); the before n
 **Honest limits:**
 - **Most how-to sentences are still uncited.** Adding citations automatically by word overlap was not done: it would attribute sentences the model never attributed.
 - **One control answer got worse:** for "Which Python versions does orjson support?" the new answer invented "Python 3.95" (it mixed in Rust 1.95). The citation checker flagged all three of its claims. With one sample per question, it can't be told apart from run-to-run variation.
-- **The rule is in every prompt,** so the list benchmark answers saved before this change no longer match the current code exactly.
+- **The rule is in every prompt,** so the 12-question list benchmark was rerun with it (cold, seed 42, temperature 0):
+  - **Coverage is unchanged:** all 12 at 100%, and no filler left. Time is about the same, 45 minutes.
+  - **More sentences are cited, and a smaller share pass the check:** 133 of 154 (86%), compared with 124 of 135 (92%) before.
+  - **Checked by hand,** the 21 that fail are not invented facts:
+    - **15 name the right fact but give the wrong passage number.** The checker finds the right passage for each. Ten of them are in the student-handbook answer, which cited one passage for a whole section's facts.
+    - **6 are paraphrases the word-overlap check can't confirm.** Each one is true in the document: charset-normalizer's percentile table, its `-n`/`-m` flags and its "brute forcing" line; Rich's examples list; httpcore's status, headers and content.
+  - **The saved answers in `eval/results/list_answers_*` are from this rerun.**
