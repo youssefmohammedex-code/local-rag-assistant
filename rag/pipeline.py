@@ -14,7 +14,7 @@ from rag.chunking import chunk_pages
 from rag.citations import CitationCheck, check_citations, same_heading, segments
 from rag.config import Settings
 from rag.errors import NoDocumentsError
-from rag.filler import filler_headings, is_filler, splice
+from rag.filler import filler_headings, insert_sections, is_filler, splice
 from rag.filler import sections as answer_sections
 from rag.loaders import load_documents, pretty_source
 from rag.loops import LoopDetector
@@ -96,6 +96,43 @@ def candidate_lists(hits: list[Hit], outlines: dict[str, list[tuple[str, str]]],
 # top1. The selector is often unsure (0.793 vs 0.791 between a changelog and one release's
 # sub-list), so expanding the two best hedges that, at ~27% more context. Kept switchable.
 LIST_STRATEGY = "top2"  # "top1" | "top2" | "nested-both" | "ancestor"
+
+
+# A list whose sub-sections hold this many of the search hits is expanded even when its summary ranks
+# low, if the best-ranked lists are inside it. For "every release in the pydantic changelog" the 20
+# hits came from 16 different releases, but the changelog's summary (48 version numbers) looked
+# nothing like the question, and two single releases' "What's Changed" sub-lists ranked first.
+# 3, 4 and 5 gave identical results on 41 list questions. None disables it.
+SPREAD_MIN: int | None = 4
+
+
+def hits_per_child(node: tuple, hits: list[Hit]) -> int:
+    """How many of a section's sub-sections the hits fall in: a list question about that section
+    retrieves passages from many of its items."""
+    source, parent, kids = node
+    prefix = f"{parent} > " if parent else ""
+    return sum(any(h.source == source and (h.section == prefix + name or h.section.startswith(prefix + name + " > "))
+                   for h in hits) for name, _ in kids)
+
+
+NOT_COVERED_HEADING = "Also in this list, without details"
+
+
+def items_without_passages(node: tuple, hits: list[Hit]) -> list[str]:
+    """Names of a list's items that no hit comes from: when a list is longer than the context budget
+    (a 53-release changelog), expansion stops partway and the rest would silently be left out."""
+    source, parent, kids = node
+    prefix = f"{parent} > " if parent else ""
+    return [name for name, _ in kids
+            if not any(h.source == source and (h.section == prefix + name or h.section.startswith(prefix + name + " > "))
+                       for h in hits)]
+
+
+def not_covered_note(names: list[str]) -> str:
+    """A closing section naming the items the answer couldn't cover, from the document's outline, so a
+    long list is complete and says where it lacks details instead of silently stopping."""
+    return (f"\n\n### {NOT_COVERED_HEADING}\n{len(names)} more item(s) in this list didn't fit in the context, "
+            f"so they are named here from the document's headings only: " + "; ".join(names) + ".")
 
 
 def _is_ancestor(a: tuple, b: tuple) -> bool:
@@ -208,6 +245,17 @@ REPAIR_QUESTION = "What does each of these sections of the documents say?"
 REPAIR_ITEMS_PER_CALL = 8  # filler sections regenerated per model call
 
 
+def follows_list(headings: list[str], items: list[ListItem]) -> bool:
+    """Is the answer enumerating this list: are most of its headings items of it? Only then are
+    missing items "skipped". An answer may rightly use other headings, like the FAQ questions
+    written inside orjson's "Questions" section, and then the list's names are not missing."""
+    def norm(text: str) -> str:
+        return " ".join(re.sub(r"[^\w]+", " ", text.lower()).split())
+    names = {norm(item.name) for item in items}
+    matched = sum(norm(h) in names for h in headings)  # exact: "Example" must not match "Run the upgraded example"
+    return matched >= 3 and matched / len(headings) > 0.5  # one "Questions" heading is not enumerating a list
+
+
 def plain_name(name: str) -> str:
     """A section name without square brackets: Keep-a-Changelog headings like "[0.17.1] - 2021-04-29"
     made the model write passage ids ("### [26]") as headings."""
@@ -284,6 +332,7 @@ class RAGPipeline:
         self.last_stats = GenerationStats()
         self.list_scorer = self.store.similarities  # (question, texts) -> scores; replaceable in tests
         self._list_plans: dict[str, list[tuple[str, str, list]]] = {}  # question -> lists picked at retrieval
+        self._answered_lists: dict[str, tuple | None] = {}  # question -> the list its answer was written for
 
     def ingest(self, reset: bool = True) -> IngestReport:
         """Load, chunk and embed every document, then replace the index.
@@ -336,7 +385,16 @@ class RAGPipeline:
         if not ranked:
             return []
         if LIST_STRATEGY == "top2":
-            return ranked[:2]
+            picked = ranked[:2]
+            if SPREAD_MIN is not None:
+                spread = max(ranked, key=lambda node: hits_per_child(node, candidates))
+                # Only when the lists that ranked best sit inside it (one release's sub-list instead
+                # of the changelog): otherwise it also swapped unrelated lists in, e.g. a changelog
+                # for "the other use cases python-dotenv describes".
+                if hits_per_child(spread, candidates) >= SPREAD_MIN and spread not in picked and \
+                        any(_is_ancestor(spread, node) for node in picked):
+                    picked = [ranked[0], spread]  # the list chooser decides between them
+            return picked
         if LIST_STRATEGY == "nested-both" and len(ranked) > 1 and _nested(ranked[0], ranked[1]):
             return ranked[:2]
         if LIST_STRATEGY == "ancestor":
@@ -503,6 +561,15 @@ class RAGPipeline:
             request = self._request(question, [hits[i - 1] for i in ids], mode, ids=ids,
                                     instructions=checklist_instructions(items))
             yield from self._stream_call(request)
+            plan = self._list_plans.get(question, [])
+            # Only a known list is completed. Tried and reverted: completing the outer of two nested lists
+            # when the chooser is undecided. Right for "every release in the changelog", wrong for
+            # "each part of the example upgrade" (the inner list), and no structural signal told them apart.
+            answered = plan[choice] if choice is not None else plan[0] if len(plan) == 1 else None
+            self._answered_lists[question] = answered
+            missing = items_without_passages(answered, hits) if answered else []
+            if missing:
+                yield not_covered_note(missing)
             return
         for start in range(0, len(items), LIST_ITEMS_PER_CALL):
             batch = items[start:start + LIST_ITEMS_PER_CALL]
@@ -517,21 +584,30 @@ class RAGPipeline:
         the question that triggered it: a few sections per call, each call seeing only those
         sections' passages under their real ids, cut to the section's own text (a passage runs on
         into the next sections, and the model mixed a neighbouring release's changes in). Returns
-        (answer, sections repaired). A section is kept as it was if it can't be matched to a list
-        item or its new text is filler again."""
-        filler = filler_headings(answer)
-        if not filler:
-            return answer, 0
+        (answer, sections repaired or added). A section is kept as it was if it can't be matched to
+        a list item or its new text is filler again.
+
+        Sections the answer skipped are written the same way, when it is clear which list the
+        answer was for: given 35 charset-normalizer releases with passages, the model wrote only 11
+        and skipped all 24 of the 3.x releases at the top. They are inserted in document order."""
         items = self.list_items(question, hits)
-        todo = []
-        for heading in filler:
+        todo: list[tuple[str | None, ListItem]] = []  # (heading in the answer, or None if skipped)
+        for heading in filler_headings(answer):
             item = next((i for i in items if same_heading(i.name, heading)), None)
             if item and all(item is not other for _, other in todo):
                 todo.append((heading, item))
+        answered = self._answered_lists.get(question)
+        answered_items = self.list_items(question, hits, lists=[answered]) if answered else []
+        written_headings = [h for h, _, _ in answer_sections(answer) if h != NOT_COVERED_HEADING]
+        if follows_list(written_headings, answered_items):
+            for item in answered_items:
+                if not any(same_heading(item.name, h) for h in written_headings):
+                    todo.append((None, item))
         if not todo:
             return answer, 0
         paths = self.section_paths(hits)
         bodies: dict[str, str] = {}
+        added: list[tuple[str, str]] = []
         for start in range(0, len(todo), REPAIR_ITEMS_PER_CALL):
             batch = todo[start:start + REPAIR_ITEMS_PER_CALL]
             ids = sorted({i for _, item in batch for i in item.passages})
@@ -547,8 +623,15 @@ class RAGPipeline:
                     body = next((b for h, b in written if re.fullmatch(r"\[?(\d+)\]?", h.strip())
                                  and int(h.strip("[] ")) in item.passages), None)
                 if body is not None and not is_filler(body):
-                    bodies[heading] = fix_item_citations(body, item.passages)
-        return splice(answer, bodies), len(bodies)
+                    if heading is None:
+                        added.append((item.name, fix_item_citations(body, item.passages)))
+                    else:
+                        bodies[heading] = fix_item_citations(body, item.passages)
+        answer = splice(answer, bodies)
+        if added:
+            answer = insert_sections(answer, added, [i.name for i in answered_items], same_heading,
+                                     before=NOT_COVERED_HEADING)
+        return answer, len(bodies) + len(added)
 
     def section_paths(self, hits: list[Hit]) -> set[str]:
         """Every section path in the documents the hits come from."""

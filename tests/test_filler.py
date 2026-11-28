@@ -8,7 +8,8 @@ from rag.filler import filler_headings, is_filler, sections, splice
 
 def test_filler_bodies():
     for body in ["- No specific versions mentioned [1].", "- Not relevant to the question [3]",
-                 "- No specific release notes provided [1.2.4]", "- [38]", "", "- No relevant information provided"]:
+                 "- No specific release notes provided [1.2.4]", "- [38]", "", "- No relevant information provided",
+                 "- [Not applicable for this version]"]:
         assert is_filler(body), body
     for body in ["- Fix SOCKS support for http URLs (#492) [12].", "- Python 3.8+ is required [10].",
                  "- Adds X. " + "More real content here. " * 10 + "Details are not mentioned elsewhere."]:
