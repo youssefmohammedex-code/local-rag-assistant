@@ -14,7 +14,7 @@ Every design decision is backed by a measurement, usually on question sets writt
 - **Hybrid search:** embeddings plus a from-scratch BM25 with identifier and heading boosting, merged with Reciprocal Rank Fusion. Embeddings alone can't tell "decision D13" from "D21".
 - **Complete answers to "list every X" questions:**
   - **List expansion:** retrieval adds one passage per sub-section of the section being listed. Top-k alone clusters on a few items.
-  - **List chooser:** the model picks which of two candidate lists the question means, in a two-order A/B check that declines to choose when unsure.
+  - **List chooser:** the model picks which of two candidate lists the question means. It's asked in both orders to cancel position bias, falls back to naming the list's heading when its letters disagree, and declines to choose when still unsure.
   - **Answer outline:** the answer is written against an outline, so the model can't silently skip items.
 - **Answers you can check:**
   - **Citation checker:** every cited sentence is matched against the passage it cites. Wrong passage ids, invented sentences and facts moved between sections are flagged in the UI.
@@ -30,7 +30,7 @@ Every design decision is backed by a measurement, usually on question sets writt
 | Passage retrieval, 20 held-out questions on private docs (hit@4) | vector 70% → **hybrid 100%** |
 | Passage retrieval, 30 blind questions on third-party docs (hit@4) | vector 80% → **hybrid 87%** |
 | Retrieved coverage of list items, 29 list questions over 4 document sets | 68% → **97%** with list expansion |
-| List answers, reproducible benchmark (12 public questions, 7 held out) | **11 of 12 at 100%** coverage, mean 97.2% |
+| List answers, reproducible benchmark (12 public questions, 7 held out) | **12 of 12 at 100%** coverage (one was at 67% until a chooser fix) |
 | End-to-end answers on documents never tuned on (13 answerable, 3 unanswerable) | 11 correct with citations, **0 made up**, 3 of 3 refused |
 | Citation checker on answers not used to build it | **22 of 24** flags are real errors |
 | Filler repair on 3 answers never used to build it | **102 of 102** empty sections filled, all citations checked |
@@ -42,7 +42,7 @@ Everything runs on a Ryzen 7 4750U laptop with 16 GB RAM and no GPU.
 
 - **Speed:** qwen2.5:7b writes about 3–4 tokens/s on a laptop CPU. A long list answer takes 3–5 minutes, and repairing a 45-item list with filler adds about 15.
 - **Very long lists don't fit:** for a changelog with 48 releases, only 17–33% of the releases fit in the context budget for retrieved passages.
-- **One list question is weak:** Typer's "walk me through each part of the example upgrade" reaches 67% coverage in the reproducible benchmark.
+- **The list chooser sometimes can't decide:** in 2 of 16 unseen list questions it keeps both candidate lists, so the answer can include unrelated sections.
 - **The citation checker uses word overlap, not meaning:** a sentence that reuses a passage's words but reverses its meaning would pass.
 - **Items written inside a section's text,** such as FAQ questions as bold lines, benefit less from list handling than items that are headings.
 - **Small question sets:** 12–30 questions per benchmark, hand-graded where it matters. Treat the numbers as evidence, not guarantees.

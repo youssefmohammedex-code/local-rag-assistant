@@ -17,6 +17,7 @@ How each part of the [Local RAG Assistant](../README.md) was measured, what fail
   - [Filler under each item of a whole-changelog list (fixed by repairing only those sections)](#filler-under-each-item-of-a-whole-changelog-list-fixed-by-repairing-only-those-sections)
   - [Checking citations](#checking-citations)
   - [Reproducible list-answer benchmark](#reproducible-list-answer-benchmark)
+  - [The list chooser answered by position: a heading-name fallback](#the-list-chooser-answered-by-position-a-heading-name-fallback)
   - [Model comparison: `llama3.2:3b` vs `qwen2.5:7b`](#model-comparison-llama323b-vs-qwen257b)
   - [Stopping repetition loops](#stopping-repetition-loops)
 
@@ -273,7 +274,7 @@ Choose the strategy with `RAG_LIST_ANSWERS` or `python -m rag ask --list-answers
 
 **Chooser picks on all 13 list questions:**
 - **Correct:** 11 picks.
-- **Abstained:** 2 questions, python-dotenv's use cases and Typer's example upgrade, where the orders disagreed and both lists were kept.
+- **Abstained:** 2 questions, python-dotenv's use cases and Typer's example upgrade, where the orders disagreed and both lists were kept. These turned out to be position bias, and are now resolved by a fallback question (see "The list chooser answered by position" below).
 - **Nothing to choose:** the Rich README expands a single list.
 - **Wrong picks:** none.
 
@@ -408,13 +409,33 @@ python -m eval.list_answers --cold --docs data/docs/sample --db data/chroma_eval
 ```
 
 **Baseline (seed 42, temperature 0):** 12 public list questions, 5 used in design and 7 held out.
-- **Coverage:** 11 are at 100%. Typer's "walk me through each part of the example upgrade" is at 67%, so the mean is 97.2%.
+- **First run:** 11 were at 100%. Typer's "walk me through each part of the example upgrade" was at 67%, so the mean was 97.2%. This corrected the list-chooser results above, where that question showed 100% in one run, flagged there as possibly run-to-run variance.
+- **After fixing the chooser's position bias (next section):** **all 12 at 100%**.
 - **Citations:** 124 of 135 cited sentences pass the citation check.
 - **Filler:** no answer has any left.
 - **Time:** about 45 minutes.
 - **Per-question tables:** `eval/results/list_answers_{gen,pdf,sample}.md`.
 
-A correction to the list-chooser results above: the Typer upgrade question showed 100% in one run, flagged there as possibly run-to-run variance. This reproducible run gives 67%.
+### The list chooser answered by position: a heading-name fallback
+
+**The Typer 67%, investigated:**
+- **Retrieval found both lists:** Typer's 7 top-level README sections, and the 3 parts of "Example upgrade" the question asks about.
+- **The chooser answered "B" in both orders,** so it was picking a position, not a list. The two-order check correctly called that a disagreement and kept both lists.
+- **The answer outline then mixed both lists.** The model filed "An example with two subcommands" under the heading "Example upgrade", so the scorer, which looks for the item's name, missed it.
+- **The same thing happened to python-dotenv's use cases.**
+
+**The fix:**
+- **When the letters disagree,** the model is asked again in both orders, this time to answer with the list's heading (`choose_heading_prompt`). A heading can't be chosen by position.
+- **The reply must match one heading exactly,** in full or by its last part ("Other Use Cases"), and both orders must agree.
+- **Questions the letters already decide never reach the heading question,** so their picks can't change.
+
+**Why not use the heading question alone:** on the 13 design questions it was worse than letters wherever letters already worked. It named "Serialize" for orjson's option flags, which identifies neither list, and gave a different heading in each order for the private modules question. As a fallback it only gets the cases letters can't decide.
+
+| Chooser check | Result |
+|---|---|
+| 13 design questions | both stuck cases resolved correctly; the other 11 unchanged |
+| **16 list questions not used for this** (7 public, 9 on private docs) | letters decided 11, all correct. Of the 5 that needed the fallback: **3 correct picks, 2 still undecided (both lists kept, as before), 0 wrong** |
+| Reproducible rerun of the 9 package-doc list questions | Typer upgrade 67% → **100%**; python-dotenv use cases still 100%, now with exactly its 4 use cases. The **7 questions the letters decide reproduced the earlier answers character for character**, in a separate run on a later day |
 
 To measure the spread at the app's real setting instead, use `--temperature 0.1 --seed none --runs 3`. That takes about 3 hours.
 
